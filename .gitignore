@@ -1,0 +1,9 @@
+node_modules/
+.env
+dist/
+build/
+.DS_Store
+.vscode/
+
+# Internal planning doc — not meant for the public repo
+PHASE_EXECUTION.md
