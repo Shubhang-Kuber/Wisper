@@ -19,7 +19,7 @@ A real-time 1:1 text messaging app, built as a full-stack project to practice sy
 
 ## System Design
 
-![System Design](docs/Whatsapp%20Chat%20app%20systemdesign.png)
+![System Design](docs/system-design.png)
 
 ## How It Works
 
