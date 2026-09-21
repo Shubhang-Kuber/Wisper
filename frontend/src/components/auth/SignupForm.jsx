@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { getErrorMessage } from '../../utils/errors';
 import { isValidEmail } from '../../utils/validation';
+import PasswordInput from './PasswordInput';
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -88,9 +89,8 @@ export default function SignupForm({ onSwitchToLogin }) {
 
         <div className={`field ${fieldErrors.password ? 'has-error' : ''}`}>
           <label htmlFor="signup-password">Password</label>
-          <input
+          <PasswordInput
             id="signup-password"
-            type="password"
             autoComplete="new-password"
             placeholder="At least 8 characters"
             value={password}

@@ -186,6 +186,43 @@ a {
   animation: field-error-in 0.15s var(--ease);
 }
 
+.password-input {
+  position: relative;
+  display: flex;
+}
+
+.password-input input {
+  width: 100%;
+  padding-right: 44px;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: color 0.15s var(--ease);
+}
+
+.password-toggle:hover {
+  color: var(--text-muted);
+}
+
+.password-toggle:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+
 @keyframes field-error-in {
   from {
     opacity: 0;

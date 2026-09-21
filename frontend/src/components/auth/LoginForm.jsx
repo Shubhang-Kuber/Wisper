@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { getErrorMessage } from '../../utils/errors';
 import { isValidEmail } from '../../utils/validation';
+import PasswordInput from './PasswordInput';
 
 export default function LoginForm({ onSwitchToSignup }) {
   const { login } = useAuth();
@@ -67,9 +68,8 @@ export default function LoginForm({ onSwitchToSignup }) {
 
         <div className={`field ${fieldErrors.password ? 'has-error' : ''}`}>
           <label htmlFor="login-password">Password</label>
-          <input
+          <PasswordInput
             id="login-password"
-            type="password"
             autoComplete="current-password"
             placeholder="••••••••"
             value={password}
