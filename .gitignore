@@ -1,9 +1,30 @@
 node_modules/
 .env
+.env.local
+.env.*.local
 dist/
+dist-ssr/
 build/
+*.local
 .DS_Store
 .vscode/
+
+# Editor / OS junk
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Logs (npm/yarn/pnpm can drop these on a failed install, in backend/ or frontend/)
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
 # Internal planning doc — not meant for the public repo
 PHASE_EXECUTION.md

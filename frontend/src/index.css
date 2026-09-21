@@ -1,0 +1,453 @@
+/* ---------------------------------------------------------------------- */
+/* Wisper — design tokens                                                 */
+/* A hushed, late-night palette: deep plum/ink background, one violet     */
+/* primary, one warm coral accent for anything that needs to feel alive   */
+/* (focus states, the send affordance in 5B). Committed here so 5B        */
+/* inherits it rather than reinventing it.                                */
+/* ---------------------------------------------------------------------- */
+:root {
+  --bg: #120f1c;
+  --bg-elevated: #1a1630;
+  --bg-card: #201a3a;
+  --bg-inset: #171029;
+
+  --border: #322b52;
+  --border-soft: #262042;
+
+  --text: #f3effc;
+  --text-muted: #a99fc9;
+  --text-faint: #766e97;
+
+  --primary: #8b6bff;
+  --primary-hover: #7c57ff;
+  --primary-soft: rgba(139, 107, 255, 0.16);
+
+  --accent: #ff9466;
+  --accent-soft: rgba(255, 148, 102, 0.14);
+
+  --success: #4fd1a5;
+  --error: #ff6b81;
+  --error-soft: rgba(255, 107, 129, 0.12);
+
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
+
+  --shadow-card: 0 20px 60px -20px rgba(6, 4, 16, 0.7);
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  --sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100svh;
+  background:
+    radial-gradient(circle at 15% 0%, rgba(139, 107, 255, 0.14), transparent 45%),
+    radial-gradient(circle at 85% 100%, rgba(255, 148, 102, 0.1), transparent 50%),
+    var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100svh;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+button {
+  font-family: inherit;
+}
+
+a {
+  color: var(--accent);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Buttons                                                                */
+/* ---------------------------------------------------------------------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 12px 20px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s var(--ease), background-color 0.15s var(--ease), box-shadow 0.15s var(--ease), opacity 0.15s var(--ease);
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 0 8px 24px -8px rgba(139, 107, 255, 0.6);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+  box-shadow: 0 10px 28px -8px rgba(139, 107, 255, 0.75);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.btn-block {
+  width: 100%;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Form fields                                                            */
+/* ---------------------------------------------------------------------- */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+}
+
+.field label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+.field input {
+  font-family: inherit;
+  font-size: 15px;
+  color: var(--text);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  outline: none;
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease), background-color 0.15s var(--ease);
+}
+
+.field input::placeholder {
+  color: var(--text-faint);
+}
+
+.field input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+  background: var(--bg-elevated);
+}
+
+.field.has-error input {
+  border-color: var(--error);
+}
+
+.field.has-error input:focus {
+  box-shadow: 0 0 0 3px var(--error-soft);
+}
+
+.field-error {
+  font-size: 13px;
+  color: var(--error);
+  animation: field-error-in 0.15s var(--ease);
+}
+
+@keyframes field-error-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Banners                                                                */
+/* ---------------------------------------------------------------------- */
+.banner {
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  font-size: 14px;
+  line-height: 1.4;
+  text-align: left;
+  animation: banner-in 0.2s var(--ease);
+}
+
+.banner-error {
+  background: var(--error-soft);
+  color: #ffb0bd;
+  border: 1px solid rgba(255, 107, 129, 0.35);
+}
+
+@keyframes banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Spinner (form submission / route guard loading states)                 */
+/* ---------------------------------------------------------------------- */
+.spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+.spinner-lg {
+  width: 32px;
+  height: 32px;
+  border-width: 3px;
+  border-color: var(--border);
+  border-top-color: var(--primary);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skeleton loading placeholders                                         */
+/* ---------------------------------------------------------------------- */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-inset);
+  border-radius: var(--radius-sm);
+}
+
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  animation: skeleton-sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes skeleton-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Auth screens                                                           */
+/* ---------------------------------------------------------------------- */
+.auth-shell {
+  min-height: 100svh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  padding: 36px 32px;
+  box-shadow: var(--shadow-card);
+  animation: card-in 0.35s var(--ease);
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 28px;
+}
+
+.auth-brand-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+  flex-shrink: 0;
+}
+
+.auth-brand-name {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.auth-card h1 {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin-bottom: 6px;
+}
+
+.auth-card .subtitle {
+  color: var(--text-muted);
+  font-size: 14px;
+  margin-bottom: 24px;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.auth-switch {
+  margin-top: 22px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.auth-switch button {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  transition: opacity 0.15s var(--ease);
+}
+
+.auth-switch button:hover {
+  opacity: 0.8;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Authenticated placeholder view                                        */
+/* ---------------------------------------------------------------------- */
+.dashboard-shell {
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 24px;
+  text-align: center;
+}
+
+.dashboard-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--primary), var(--accent));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.dashboard-shell h1 {
+  font-size: 22px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  transition: background-color 0.2s var(--ease), color 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  transition: background-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+
+.status-pill.is-connected {
+  color: var(--success);
+  border-color: rgba(79, 209, 165, 0.35);
+  background: rgba(79, 209, 165, 0.1);
+}
+
+.status-pill.is-connected .status-dot {
+  background: var(--success);
+  box-shadow: 0 0 0 4px rgba(79, 209, 165, 0.18);
+}
+
+.status-pill.is-connecting .status-dot {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
