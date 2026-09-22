@@ -1,10 +1,12 @@
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
+import ChatLayout from './chat/ChatLayout';
 
-// Placeholder authenticated view for 5A. The real chat UI (conversation
-// list, message thread, read receipts) is 5B — this just proves auth +
-// the socket connection work end to end.
+// Authenticated app shell: a slim top bar (brand, connection status,
+// logout) over the chat UI. Phase 5A left this component as a bare
+// placeholder just to prove auth + the socket connection worked end to
+// end — this is the real Phase 5B surface built on top of it.
 export default function Dashboard() {
   const { username, logout } = useAuth();
   const { isConnected } = useSocket();
@@ -15,21 +17,27 @@ export default function Dashboard() {
     navigate('/login', { replace: true });
   }
 
-  const initial = username ? username.trim()[0]?.toUpperCase() : '?';
-
   return (
-    <div className="dashboard-shell">
-      <div className="dashboard-avatar">{initial}</div>
-      <h1>Logged in as {username}</h1>
+    <div className="app-shell">
+      <header className="app-topbar">
+        <div className="app-topbar-brand">
+          <div className="auth-brand-mark app-topbar-mark" />
+          <span className="auth-brand-name">Wisper</span>
+        </div>
 
-      <span className={`status-pill ${isConnected ? 'is-connected' : 'is-connecting'}`}>
-        <span className="status-dot" />
-        {isConnected ? 'Socket connected' : 'Connecting…'}
-      </span>
+        <div className="app-topbar-right">
+          <span className={`status-pill ${isConnected ? 'is-connected' : 'is-connecting'}`}>
+            <span className="status-dot" />
+            {isConnected ? 'Connected' : 'Connecting…'}
+          </span>
+          <span className="app-topbar-username">{username}</span>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={handleLogout}>
+            Log out
+          </button>
+        </div>
+      </header>
 
-      <button type="button" className="btn btn-ghost" onClick={handleLogout}>
-        Log out
-      </button>
+      <ChatLayout />
     </div>
   );
 }
