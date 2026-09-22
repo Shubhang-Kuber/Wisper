@@ -4,7 +4,7 @@
 General-purpose cryptographic hash. Fixed 256-bit output, deterministic, one-way.
 **Fast by design** — good for integrity checks (file checksums, signatures). Too fast to be safe for hashing passwords alone: a GPU can compute billions of SHA-256 hashes/sec, making brute-force feasible.
 
-## bcrypt
+## Bcrypt
 Purpose-built for password hashing. **Deliberately slow** via a tunable cost factor (Wisper uses `10` → 2¹⁰ rounds).
 - Auto-generates a unique random salt per password — two identical passwords produce different hashes.
 - Slowness is the security feature: irrelevant for one real login, devastating for an attacker trying billions of guesses.
