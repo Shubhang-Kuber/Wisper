@@ -1,5 +1,8 @@
-// Deterministic hash → hue, so the same username always renders the same
-// color for every viewer (no random colors, no lookup table to maintain).
+// Deterministic hash → palette swatch, so the same username always renders
+// the same color for every viewer (no random colors, no lookup table to
+// maintain). Cycles through the app's fixed accent palette (as CSS custom
+// properties, so it stays in sync with the rest of the UI) instead of an
+// arbitrary full-hue-wheel color, so avatars never clash with the theme.
 function hashString(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i += 1) {
@@ -9,9 +12,18 @@ function hashString(str) {
   return hash;
 }
 
+const AVATAR_COLOR_VARS = [
+  '--teal',
+  '--terracotta',
+  '--mustard',
+  '--sage',
+  '--dusty-rose',
+  '--slate-blue',
+];
+
 function colorForUsername(username) {
-  const hue = Math.abs(hashString(username || '?')) % 360;
-  return `hsl(${hue}, 58%, 48%)`;
+  const index = Math.abs(hashString(username || '?')) % AVATAR_COLOR_VARS.length;
+  return `var(${AVATAR_COLOR_VARS[index]})`;
 }
 
 export default function Avatar({ username, size = 40 }) {
