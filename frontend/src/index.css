@@ -1,37 +1,75 @@
 /* ---------------------------------------------------------------------- */
 /* Wisper — design tokens                                                 */
-/* A hushed, late-night palette: deep plum/ink background, one violet     */
-/* primary, one warm coral accent for anything that needs to feel alive   */
-/* (focus states, the send affordance in 5B). Committed here so 5B        */
-/* inherits it rather than reinventing it.                                */
+/* A dark, moody palette: near-black plum-tinted background, cream text,  */
+/* teal as the primary accent (sender bubbles, buttons, links) against a  */
+/* slate-blue secondary (receiver bubbles), with terracotta as the one    */
+/* warm call-to-action color (the send button) and mustard/sage/dusty-    */
+/* rose reserved for attention, success, and sparing special accents.     */
+/* Every color in the app is one of these eight swatches, the near-black  */
+/* base/surface tones derived from them, or a color-mix() blend of two —  */
+/* nothing outside this closed set.                                      */
 /* ---------------------------------------------------------------------- */
 :root {
-  --bg: #120f1c;
-  --bg-elevated: #1a1630;
-  --bg-card: #201a3a;
-  --bg-inset: #171029;
+  /* Raw palette swatches */
+  --cream: #f2e9d8;
+  --teal: #2f6f6d;
+  --slate-blue: #59718a;
+  --terracotta: #e07a47;
+  --mustard: #d4a72c;
+  --sage: #8fa68f;
+  --dusty-rose: #c47c8a;
+  --plum: #5b3a62;
 
-  --border: #322b52;
-  --border-soft: #262042;
+  /* Backgrounds — base is deepest, each layer a touch lighter */
+  --bg: #15141a;
+  --bg-inset: #19171f;
+  --bg-elevated: #1e1c24;
+  --bg-card: #221f2a;
 
-  --text: #f3effc;
-  --text-muted: #a99fc9;
-  --text-faint: #766e97;
+  --border: color-mix(in srgb, var(--cream) 14%, var(--bg-card));
+  --border-soft: color-mix(in srgb, var(--cream) 8%, var(--bg-card));
 
-  --primary: #8b6bff;
-  --primary-hover: #7c57ff;
-  --primary-soft: rgba(139, 107, 255, 0.16);
+  /* Text */
+  --text: var(--cream);
+  --text-muted: color-mix(in srgb, var(--cream) 62%, transparent);
+  --text-faint: color-mix(in srgb, var(--cream) 40%, transparent);
+  --text-on-color: color-mix(in srgb, var(--cream) 75%, transparent);
 
-  --accent: #ff9466;
-  --accent-soft: rgba(255, 148, 102, 0.14);
+  /* Primary accent (teal) — sender bubbles, primary buttons, links, active states */
+  --primary: var(--teal);
+  --primary-hover: color-mix(in srgb, var(--teal) 82%, white);
+  --primary-soft: color-mix(in srgb, var(--teal) 18%, transparent);
 
-  --success: #4fd1a5;
-  --error: #ff6b81;
-  --error-soft: rgba(255, 107, 129, 0.12);
+  /* Secondary accent (slate blue) — receiver bubbles, secondary UI */
+  --secondary: var(--slate-blue);
+  --secondary-soft: color-mix(in srgb, var(--slate-blue) 18%, transparent);
 
-  --radius-sm: 8px;
+  /* Warm highlight (terracotta) — send button, CTAs, hover on primary actions */
+  --accent: var(--terracotta);
+  --accent-hover: color-mix(in srgb, var(--terracotta) 70%, var(--mustard));
+  --accent-soft: color-mix(in srgb, var(--terracotta) 14%, transparent);
+
+  /* Attention / badges */
+  --badge: var(--mustard);
+
+  /* Success / positive */
+  --success: var(--sage);
+  --success-soft: color-mix(in srgb, var(--sage) 14%, transparent);
+
+  /* Alert — dusty rose + terracotta, reads as "alert" without a pure red */
+  --error: color-mix(in srgb, var(--dusty-rose) 55%, var(--terracotta) 45%);
+  --error-soft: color-mix(in srgb, var(--error) 14%, transparent);
+
+  /* Special accent — used sparingly (brand mark, small highlights) */
+  --special: var(--dusty-rose);
+
+  /* Deep, grounding contrast — header bar */
+  --deep: var(--plum);
+
+  --radius-sm: 12px;
   --radius-md: 14px;
-  --radius-lg: 22px;
+  --radius-lg: 20px;
+  --radius-pill: 20px;
 
   --shadow-card: 0 20px 60px -20px rgba(6, 4, 16, 0.7);
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
@@ -52,8 +90,8 @@ body {
 body {
   min-height: 100svh;
   background:
-    radial-gradient(circle at 15% 0%, rgba(139, 107, 255, 0.14), transparent 45%),
-    radial-gradient(circle at 85% 100%, rgba(255, 148, 102, 0.1), transparent 50%),
+    radial-gradient(circle at 15% 0%, color-mix(in srgb, var(--teal) 16%, transparent), transparent 45%),
+    radial-gradient(circle at 85% 100%, color-mix(in srgb, var(--terracotta) 12%, transparent), transparent 50%),
     var(--bg);
   color: var(--text);
   font-family: var(--sans);
@@ -77,7 +115,20 @@ button {
 }
 
 a {
-  color: var(--accent);
+  color: var(--primary);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Keyboard focus                                                         */
+/* Mustard is the one color reserved for "draw the eye" — a visible       */
+/* keyboard-focus ring is exactly that, so it's the default outline for   */
+/* anything that doesn't already define its own focus treatment. Text     */
+/* inputs keep their teal focus ring (below) instead of stacking both.    */
+/* ---------------------------------------------------------------------- */
+:focus-visible {
+  outline: 2px solid var(--badge);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -89,7 +140,7 @@ a {
   justify-content: center;
   gap: 8px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   padding: 12px 20px;
   font-size: 15px;
   font-weight: 600;
@@ -108,13 +159,13 @@ a {
 
 .btn-primary {
   background: var(--primary);
-  color: #fff;
-  box-shadow: 0 8px 24px -8px rgba(139, 107, 255, 0.6);
+  color: var(--text);
+  box-shadow: 0 8px 24px -8px color-mix(in srgb, var(--primary) 60%, transparent);
 }
 
 .btn-primary:hover:not(:disabled) {
   background: var(--primary-hover);
-  box-shadow: 0 10px 28px -8px rgba(139, 107, 255, 0.75);
+  box-shadow: 0 10px 28px -8px color-mix(in srgb, var(--primary) 75%, transparent);
 }
 
 .btn-ghost {
@@ -170,6 +221,10 @@ a {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px var(--primary-soft);
   background: var(--bg-elevated);
+}
+
+.field input:focus-visible {
+  outline: none;
 }
 
 .field.has-error input {
@@ -248,8 +303,8 @@ a {
 
 .banner-error {
   background: var(--error-soft);
-  color: #ffb0bd;
-  border: 1px solid rgba(255, 107, 129, 0.35);
+  color: var(--error);
+  border: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
 }
 
 @keyframes banner-in {
@@ -270,8 +325,8 @@ a {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.35);
-  border-top-color: #fff;
+  border: 2px solid color-mix(in srgb, var(--text) 35%, transparent);
+  border-top-color: var(--text);
   animation: spin 0.7s linear infinite;
   flex-shrink: 0;
 }
@@ -304,7 +359,7 @@ a {
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--cream) 6%, transparent), transparent);
   animation: skeleton-sweep 1.4s ease-in-out infinite;
 }
 
@@ -361,7 +416,7 @@ a {
   width: 34px;
   height: 34px;
   border-radius: 10px;
-  background: linear-gradient(135deg, var(--primary), var(--accent));
+  background: linear-gradient(135deg, var(--primary), var(--special) 55%, var(--accent));
   flex-shrink: 0;
 }
 
@@ -429,13 +484,13 @@ a {
   width: 64px;
   height: 64px;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--primary), var(--accent));
+  background: linear-gradient(135deg, var(--primary), var(--special) 55%, var(--accent));
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 24px;
   font-weight: 700;
-  color: #fff;
+  color: var(--text);
 }
 
 .dashboard-shell h1 {
@@ -466,13 +521,13 @@ a {
 
 .status-pill.is-connected {
   color: var(--success);
-  border-color: rgba(79, 209, 165, 0.35);
-  background: rgba(79, 209, 165, 0.1);
+  border-color: color-mix(in srgb, var(--success) 35%, transparent);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
 }
 
 .status-pill.is-connected .status-dot {
   background: var(--success);
-  box-shadow: 0 0 0 4px rgba(79, 209, 165, 0.18);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 18%, transparent);
 }
 
 .status-pill.is-connecting .status-dot {
@@ -511,7 +566,7 @@ a {
   justify-content: space-between;
   gap: 16px;
   padding: 12px 20px;
-  background: var(--bg-elevated);
+  background: color-mix(in srgb, var(--deep) 38%, var(--bg-elevated));
   border-bottom: 1px solid var(--border-soft);
 }
 
@@ -547,7 +602,7 @@ a {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--text);
   font-weight: 700;
   flex-shrink: 0;
 }
@@ -602,6 +657,10 @@ a {
 .user-search input:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.user-search input:focus-visible {
+  outline: none;
 }
 
 .user-search-results {
@@ -668,6 +727,7 @@ a {
   color: var(--text-muted);
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 6px;
 }
 
@@ -691,7 +751,7 @@ a {
 }
 
 .conversation-item:hover {
-  background: var(--bg-inset);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-inset));
 }
 
 .conversation-item.is-active {
@@ -751,8 +811,10 @@ a {
 .chat-main-empty {
   flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 14px;
   padding: 24px;
   color: var(--text-faint);
   text-align: center;
@@ -812,12 +874,28 @@ a {
   color: var(--text-muted);
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 6px;
 }
 
 .message-thread-empty-sub {
   font-size: 13px;
   color: var(--text-faint);
+}
+
+/* A small "speech bubble" glyph, built in pure CSS (no icon library), so
+   the empty states read as intentional rather than a bare placeholder. */
+.message-thread-empty::before,
+.chat-main-empty::before,
+.conversation-list-empty::before {
+  content: '';
+  display: block;
+  width: 52px;
+  height: 52px;
+  border-radius: 16px 16px 16px 4px;
+  background: linear-gradient(135deg, var(--accent), var(--badge));
+  box-shadow: 0 14px 30px -12px color-mix(in srgb, var(--accent) 55%, transparent);
+  opacity: 0.9;
 }
 
 .message-row {
@@ -857,16 +935,16 @@ a {
 
 .mine .message-bubble {
   background: var(--primary);
-  color: #fff;
+  color: var(--text);
   border-bottom-right-radius: 4px;
-  box-shadow: 0 6px 18px -10px rgba(139, 107, 255, 0.7);
+  box-shadow: 0 6px 18px -10px color-mix(in srgb, var(--primary) 70%, transparent);
 }
 
 .theirs .message-bubble {
-  background: var(--bg-card);
+  background: var(--secondary);
   color: var(--text);
-  border: 1px solid var(--border-soft);
   border-bottom-left-radius: 4px;
+  box-shadow: 0 6px 18px -10px color-mix(in srgb, var(--secondary) 60%, transparent);
 }
 
 .message-body {
@@ -882,12 +960,9 @@ a {
   font-size: 11px;
 }
 
-.mine .message-time {
-  color: rgba(255, 255, 255, 0.75);
-}
-
+.mine .message-time,
 .theirs .message-time {
-  color: var(--text-faint);
+  color: var(--text-on-color);
 }
 
 .read-receipt {
@@ -930,6 +1005,10 @@ a {
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
 
+.message-input textarea:focus-visible {
+  outline: none;
+}
+
 .message-input textarea:disabled {
   opacity: 0.6;
 }
@@ -940,6 +1019,13 @@ a {
   padding: 0;
   border-radius: 50%;
   flex-shrink: 0;
+  background: var(--accent);
+  box-shadow: 0 8px 24px -8px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.message-send-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+  box-shadow: 0 10px 28px -8px color-mix(in srgb, var(--accent-hover) 75%, transparent);
 }
 
 @media (max-width: 640px) {
