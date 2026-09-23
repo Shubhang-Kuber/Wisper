@@ -1,11 +1,11 @@
 /* ---------------------------------------------------------------------- */
 /* Wisper — design tokens                                                 */
-/* A dark, moody palette: near-black plum-tinted background, cream text,  */
+/* A dark, moody palette: deep-navy ocean-tide background, cream text,    */
 /* teal as the primary accent (sender bubbles, buttons, links) against a  */
 /* slate-blue secondary (receiver bubbles), with terracotta as the one    */
 /* warm call-to-action color (the send button) and mustard/sage/dusty-    */
 /* rose reserved for attention, success, and sparing special accents.     */
-/* Every color in the app is one of these eight swatches, the near-black  */
+/* Every color in the app is one of these eight swatches, the deep-blue   */
 /* base/surface tones derived from them, or a color-mix() blend of two —  */
 /* nothing outside this closed set.                                      */
 /* ---------------------------------------------------------------------- */
@@ -20,11 +20,13 @@
   --dusty-rose: #c47c8a;
   --plum: #5b3a62;
 
-  /* Backgrounds — base is deepest, each layer a touch lighter */
-  --bg: #15141a;
-  --bg-inset: #19171f;
-  --bg-elevated: #1e1c24;
-  --bg-card: #221f2a;
+  /* Backgrounds — deep-navy ocean base, each layer a touch lighter and    */
+  /* a touch bluer, so the whole app reads as one cohesive tide rather     */
+  /* than a neutral near-black with color floating on top of it.          */
+  --bg: #0f1b2d;
+  --bg-inset: #121f32;
+  --bg-elevated: #162437;
+  --bg-card: #19283c;
 
   --border: color-mix(in srgb, var(--cream) 14%, var(--bg-card));
   --border-soft: color-mix(in srgb, var(--cream) 8%, var(--bg-card));
@@ -63,8 +65,10 @@
   /* Special accent — used sparingly (brand mark, small highlights) */
   --special: var(--dusty-rose);
 
-  /* Deep, grounding contrast — header bar */
-  --deep: var(--plum);
+  /* Deep, grounding contrast — header bar. Blue-slate dominant so the      */
+  /* header reads as part of the same ocean palette as the rest of the app; */
+  /* plum stays in as a faint undertone rather than the dominant color.     */
+  --deep: color-mix(in srgb, var(--slate-blue) 70%, var(--plum) 30%);
 
   --radius-sm: 12px;
   --radius-md: 14px;
@@ -859,6 +863,34 @@ a {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /* A slow, barely-perceptible tide: deep navy drifting through a mid
+     slate-blue and a soft teal undertone and back. Low contrast between
+     stops and a long loop keep this a mood, not a distraction. */
+  background: linear-gradient(
+    135deg,
+    var(--bg) 0%,
+    color-mix(in srgb, var(--slate-blue) 16%, var(--bg)) 45%,
+    color-mix(in srgb, var(--teal) 12%, var(--bg)) 70%,
+    var(--bg) 100%
+  );
+  background-size: 260% 260%;
+  animation: tide-drift 28s ease-in-out infinite;
+}
+
+@keyframes tide-drift {
+  0%,
+  100% {
+    background-position: 0% 30%;
+  }
+  50% {
+    background-position: 100% 70%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-scroll {
+    animation: none;
+  }
 }
 
 .message-thread-loading {
