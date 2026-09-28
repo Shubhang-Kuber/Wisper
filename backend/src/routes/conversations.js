@@ -159,6 +159,45 @@ router.get('/:id/messages', authenticateToken, async (req, res) => {
   }
 });
 
+// GET /api/conversations/:id/search?q=<query>
+// Full-text search within one conversation, last 90 days, newest first.
+// Relies on the FULLTEXT index idx_body_fulltext on messages(body).
+router.get('/:id/search', authenticateToken, async (req, res) => {
+  const conversationId = req.params.id;
+  const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+
+  if (!q) {
+    return res.status(400).json({ error: 'Search query is required' });
+  }
+
+  try {
+    const [participantRows] = await pool.query(
+      'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?',
+      [conversationId, req.userId]
+    );
+
+    if (participantRows.length === 0) {
+      return res.status(403).json({ error: 'You are not a participant in this conversation' });
+    }
+
+    const [rows] = await pool.query(
+      `SELECT id, sender_id, body, created_at
+       FROM messages
+       WHERE conversation_id = ?
+         AND created_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+         AND MATCH(body) AGAINST(? IN BOOLEAN MODE)
+       ORDER BY created_at DESC
+       LIMIT 500`,
+      [conversationId, q]
+    );
+
+    return res.status(200).json(rows);
+  } catch (err) {
+    console.error('Search messages error:', err);
+    return res.status(500).json({ error: 'Something went wrong, please try again' });
+  }
+});
+
 // POST /api/conversations/:id/read
 // Marks the conversation as read up to now, for the requesting user only.
 router.post('/:id/read', authenticateToken, async (req, res) => {
