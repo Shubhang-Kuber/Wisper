@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { getMessages, markConversationRead } from '../../api/conversations';
+import { getMessages } from '../../api/conversations';
 import { getErrorMessage } from '../../utils/errors';
 import Avatar from './Avatar';
 import LastSeenIndicator from './LastSeenIndicator';
@@ -27,10 +27,12 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
   const bottomRef = useRef(null);
   const isNearBottomRef = useRef(true);
 
-  // Initial history fetch, join the room (covers this socket having
+  // Initial history fetch and join the room (covers this socket having
   // connected — or auto-rejoined its existing rooms — before this
   // conversation existed; see the join_conversation comment in
-  // backend/src/sockets/index.js), and mark read now that it's open.
+  // backend/src/sockets/index.js). Marking this conversation read is owned
+  // by ChatLayout now (it's the one with the sidebar badge/visibility
+  // state to keep in sync), not this component.
   useEffect(() => {
     let cancelled = false;
 
@@ -50,10 +52,6 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
 
     socket?.emit('join_conversation', { conversationId });
 
-    markConversationRead(conversationId).catch(() => {
-      // Best-effort — a failed read receipt shouldn't block viewing.
-    });
-
     return () => {
       cancelled = true;
     };
@@ -70,13 +68,6 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
       if (Number(message.conversation_id) !== Number(conversationId)) return;
 
       setMessages((prev) => [...prev, message]);
-
-      // A new message just landed while this thread is open — keep
-      // marking it read live instead of waiting for the next time this
-      // conversation is opened.
-      if (Number(message.sender_id) !== Number(currentUserId)) {
-        markConversationRead(conversationId).catch(() => {});
-      }
     }
 
     function handleConversationRead(payload) {
