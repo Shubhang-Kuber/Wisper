@@ -81,7 +81,11 @@ router.get('/', authenticateToken, async (req, res) => {
          ocp.last_read_at AS otherLastReadAt,
          lm.body AS lastMessageBody,
          lm.created_at AS lastMessageAt,
-         lm.sender_id AS lastMessageSenderId
+         lm.sender_id AS lastMessageSenderId,
+         (SELECT COUNT(*) FROM messages m
+           WHERE m.conversation_id = c.id
+             AND m.sender_id <> ?
+             AND (cp.last_read_at IS NULL OR m.created_at > cp.last_read_at)) AS unread_count
        FROM conversation_participants cp
        JOIN conversations c ON c.id = cp.conversation_id
        JOIN conversation_participants ocp
@@ -98,7 +102,7 @@ router.get('/', authenticateToken, async (req, res) => {
        ) lm ON lm.conversation_id = c.id
        WHERE cp.user_id = ?
        ORDER BY COALESCE(lm.created_at, c.created_at) DESC`,
-      [req.userId]
+      [req.userId, req.userId]
     );
 
     return res.status(200).json({ conversations: rows });
