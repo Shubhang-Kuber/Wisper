@@ -1,4 +1,4 @@
-# Auth Concepts — Quick Reference
+# Auth Concepts — Quick Reference for reading
 
 ## SHA-256
 General-purpose cryptographic hash. Fixed 256-bit output, deterministic, one-way.
