@@ -21,6 +21,15 @@ export function getMessages(conversationId, { before, limit } = {}) {
     .then((res) => res.data.messages);
 }
 
+// GET /api/conversations/:id/search?q= — FULLTEXT (boolean mode) search in
+// one conversation, last 90 days, newest first. Resolves to a bare array of
+// { id, sender_id, body, created_at }.
+export function searchMessages(conversationId, q, { signal } = {}) {
+  return client
+    .get(`/conversations/${conversationId}/search`, { params: { q }, signal })
+    .then((res) => res.data);
+}
+
 // POST /api/conversations/:id/read — marks read up to now for the
 // requesting user, and (Phase 5B scoped backend exception) pushes a
 // `conversation_read` socket event to the other participant so their

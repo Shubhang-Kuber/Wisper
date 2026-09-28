@@ -869,6 +869,8 @@ a {
 }
 
 .message-thread-header {
+  position: relative;
+  z-index: 2;
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -881,6 +883,85 @@ a {
 .message-thread-header h2 {
   font-size: 15.5px;
   font-weight: 700;
+}
+
+.message-search-toggle {
+  margin-left: auto;
+  padding: 8px 10px;
+}
+
+/* Anchored under the header so it never scrolls with the messages. */
+.message-search {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 16px;
+  z-index: 3;
+  max-width: calc(100% - 32px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+
+.message-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.message-search-input {
+  flex: 1;
+  min-width: 0;
+  width: 220px;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  outline: none;
+}
+
+.message-search-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.message-search-count {
+  min-width: 64px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.message-search-nav {
+  padding: 6px 10px;
+}
+
+.message-search-note {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.message-search-error {
+  color: var(--error);
+}
+
+/* Inline highlight on the matching text only, not the bubble. Mustard is
+   the palette's "draw the eye" color; dark text keeps it legible on both
+   the teal and slate-blue bubbles. */
+.search-highlight {
+  background: var(--badge);
+  color: var(--bg);
+  border-radius: 3px;
+  padding: 0 2px;
 }
 
 .last-seen {
