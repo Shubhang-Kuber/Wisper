@@ -26,21 +26,30 @@ function colorForUsername(username) {
   return `var(${AVATAR_COLOR_VARS[index]})`;
 }
 
-export default function Avatar({ username, size = 40 }) {
+export default function Avatar({ username, size = 40, unreadCount = 0 }) {
   const initial = username ? username.trim()[0]?.toUpperCase() : '?';
+  const hasUnread = unreadCount > 0;
+  const unreadDisplay = unreadCount > 99 ? '99+' : unreadCount;
 
   return (
-    <div
-      className="avatar"
-      style={{
-        width: size,
-        height: size,
-        fontSize: Math.round(size * 0.42),
-        background: colorForUsername(username),
-      }}
-      aria-hidden="true"
-    >
-      {initial}
+    <div className="avatar-container">
+      <div
+        className="avatar"
+        style={{
+          width: size,
+          height: size,
+          fontSize: Math.round(size * 0.42),
+          background: colorForUsername(username),
+        }}
+        aria-hidden="true"
+      >
+        {initial}
+      </div>
+      {hasUnread && (
+        <span className="avatar-badge" aria-label={`${unreadCount} unread messages`}>
+          {unreadDisplay}
+        </span>
+      )}
     </div>
   );
 }

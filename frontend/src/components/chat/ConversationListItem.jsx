@@ -12,8 +12,6 @@ function formatPreviewTime(iso) {
 
 export default function ConversationListItem({ conversation, isActive, onClick }) {
   const { otherUsername, lastMessageBody, lastMessageAt, unreadCount } = conversation;
-  const hasUnread = unreadCount > 0;
-  const unreadDisplay = unreadCount > 99 ? '99+' : unreadCount;
 
   return (
     <button
@@ -21,18 +19,13 @@ export default function ConversationListItem({ conversation, isActive, onClick }
       className={`conversation-item ${isActive ? 'is-active' : ''}`}
       onClick={onClick}
     >
-      <Avatar username={otherUsername} size={44} />
+      <Avatar username={otherUsername} size={44} unreadCount={unreadCount} />
       <div className="conversation-item-body">
         <div className="conversation-item-top">
           <span className="conversation-item-name">{otherUsername}</span>
           <span className="conversation-item-meta">
             {lastMessageAt && (
               <span className="conversation-item-time">{formatPreviewTime(lastMessageAt)}</span>
-            )}
-            {hasUnread && (
-              <span className="conversation-item-badge" aria-label={`${unreadCount} unread messages`}>
-                {unreadDisplay}
-              </span>
             )}
           </span>
         </div>
