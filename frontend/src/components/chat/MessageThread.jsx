@@ -264,21 +264,7 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
   return (
     <div className="message-thread">
       <header className="message-thread-header">
-        <Avatar username={otherUsername} size={40} />
-        <div>
-          <h2>{otherUsername}</h2>
-          <LastSeenIndicator lastSeenAt={otherLastSeenAt} />
-        </div>
-        <button
-          type="button"
-          className="btn btn-ghost message-search-toggle"
-          onClick={() => (isSearchOpen ? closeSearch() : setIsSearchOpen(true))}
-          aria-label="Search messages"
-          aria-expanded={isSearchOpen}
-        >
-          <SearchIcon />
-        </button>
-        {isSearchOpen && (
+        {isSearchOpen ? (
           <MessageSearch
             query={searchQuery}
             onQueryChange={setSearchQuery}
@@ -291,6 +277,23 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
             status={searchStatus}
             errorMessage={searchError}
           />
+        ) : (
+          <div className="message-thread-header-content">
+            <Avatar username={otherUsername} size={40} />
+            <div>
+              <h2>{otherUsername}</h2>
+              <LastSeenIndicator lastSeenAt={otherLastSeenAt} />
+            </div>
+            <button
+              type="button"
+              className="btn btn-ghost message-search-toggle"
+              onClick={() => setIsSearchOpen(true)}
+              aria-label="Search messages"
+              aria-expanded={isSearchOpen}
+            >
+              <SearchIcon />
+            </button>
+          </div>
         )}
       </header>
 

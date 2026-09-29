@@ -53,53 +53,57 @@ export default function MessageSearch({
   return (
     <div className="message-search" role="search" onKeyDown={handlePanelKeyDown}>
       <div className="message-search-row">
-        <input
-          ref={inputRef}
-          type="text"
-          className="message-search-input"
-          placeholder="Search messages..."
-          value={query}
-          onChange={(e) => onQueryChange(e.target.value)}
-          onKeyDown={handleInputKeyDown}
-          aria-label="Search messages"
-        />
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          onClick={onSubmit}
-          disabled={status === 'loading'}
-        >
-          Search
-        </button>
+        <div className="message-search-field">
+          <input
+            ref={inputRef}
+            type="text"
+            className="message-search-input"
+            placeholder="Search messages..."
+            value={query}
+            onChange={(e) => onQueryChange(e.target.value)}
+            onKeyDown={handleInputKeyDown}
+            aria-label="Search messages"
+          />
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={onSubmit}
+            disabled={status === 'loading'}
+          >
+            Search
+          </button>
+        </div>
         <span className="message-search-count" aria-live="polite">
           {hasMatches ? `${currentIndex + 1} of ${matchCount}` : '0 of 0'}
         </span>
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm message-search-nav"
-          onClick={onPrev}
-          disabled={!hasMatches}
-          aria-label="Previous match"
-        >
-          ↑
-        </button>
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm message-search-nav"
-          onClick={onNext}
-          disabled={!hasMatches}
-          aria-label="Next match"
-        >
-          ↓
-        </button>
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm message-search-nav"
-          onClick={onClose}
-          aria-label="Close search"
-        >
-          ✕
-        </button>
+        <div className="message-search-actions">
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm message-search-nav"
+            onClick={onPrev}
+            disabled={!hasMatches}
+            aria-label="Previous match"
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm message-search-nav"
+            onClick={onNext}
+            disabled={!hasMatches}
+            aria-label="Next match"
+          >
+            ↓
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm message-search-nav"
+            onClick={onClose}
+            aria-label="Close search"
+          >
+            ✕
+          </button>
+        </div>
       </div>
       {status === 'loading' && <p className="message-search-note">Searching…</p>}
       {status === 'done' && !hasMatches && <p className="message-search-note">No matches found</p>}
