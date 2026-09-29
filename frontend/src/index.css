@@ -874,10 +874,19 @@ a {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 12px;
   padding: 14px 20px;
   background: var(--bg-elevated);
   border-bottom: 1px solid var(--border-soft);
+}
+
+/* Wraps the avatar/name/last-seen/toggle so it can be swapped out wholesale
+   for .message-search when search takes over the header (WhatsApp-style). */
+.message-thread-header-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  animation: message-thread-header-fade 180ms ease;
 }
 
 .message-thread-header h2 {
@@ -890,27 +899,36 @@ a {
   padding: 8px 10px;
 }
 
-/* Anchored under the header so it never scrolls with the messages. */
+@keyframes message-thread-header-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Takes over the entire header in place of .message-thread-header-content
+   while search is active, rather than floating below it, so it never
+   scrolls with the messages and never overlaps other header content. */
 .message-search {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 16px;
-  z-index: 3;
-  max-width: calc(100% - 32px);
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 10px 12px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-card);
+  animation: message-thread-header-fade 180ms ease;
 }
 
+/* Three columns so the count stays visually centered in the full-width bar
+   regardless of how wide the field/actions groups on either side are. */
 .message-search-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.message-search-field {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .message-search-input {
@@ -933,11 +951,17 @@ a {
 }
 
 .message-search-count {
-  min-width: 64px;
   text-align: center;
   font-size: 13px;
   color: var(--text-muted);
   white-space: nowrap;
+}
+
+.message-search-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-self: end;
 }
 
 .message-search-nav {
