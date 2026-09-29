@@ -21,6 +21,18 @@ function getHighlightTerms(sanitized) {
   return [...new Set(sanitized.split(' ').filter((t) => t.length >= 3))];
 }
 
+const draftKey = (conversationId) => `wisper_draft_reply_${conversationId}`;
+const pendingKey = (conversationId) => `wisper_pending_replies_${conversationId}`;
+
+function readJson(key, fallback) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key));
+    return value ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function SearchIcon() {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -56,6 +68,20 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
   const [searchError, setSearchError] = useState('');
   const [scrollNonce, setScrollNonce] = useState(0);
 
+  // Reply mode. `replyingTo` is { id, senderName, body, deleted }; the text
+  // lives here (not in MessageInput) so drafts can be saved and restored.
+  const [replyingTo, setReplyingTo] = useState(null);
+  const [inputText, setInputText] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [sendError, setSendError] = useState('');
+  const [hasDraft, setHasDraft] = useState(() => readJson(draftKey(conversationId), null) !== null);
+  const [pending, setPending] = useState(() => readJson(pendingKey(conversationId), []));
+  const [flashId, setFlashId] = useState(null);
+
+  const inputRef = useRef(null);
+  const restoredDraftRef = useRef(false);
+  const latestReplyStateRef = useRef({ replyingTo: null, inputText: '' });
+  const flashTimerRef = useRef(null);
   const scrollRef = useRef(null);
   const bottomRef = useRef(null);
   const isNearBottomRef = useRef(true);
@@ -252,8 +278,226 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
     requestScrollToMatch();
   }
 
+  function senderNameFor(senderId) {
+    return Number(senderId) === Number(currentUserId) ? 'You' : otherUsername;
+  }
+
+  function toReplyTarget(id, original) {
+    if (!original) return { id, senderName: '', body: '', deleted: true };
+    return { id, senderName: senderNameFor(original.sender_id), body: original.body, deleted: false };
+  }
+
+  // Preview data for a message that is a reply. The server joins the original
+  // in; the local lookup covers pending (not yet stored) replies. If neither
+  // has a body, the original is gone.
+  function getReplyRef(message) {
+    if (!message.replied_to_message_id) return null;
+    const original = messages.find((m) => Number(m.id) === Number(message.replied_to_message_id));
+    const body = message.replied_body ?? original?.body;
+    if (body == null) return { deleted: true };
+    const senderId = message.replied_sender_id ?? original?.sender_id;
+    const senderName =
+      Number(senderId) === Number(currentUserId)
+        ? 'You'
+        : message.replied_sender_username ?? otherUsername;
+    return { senderName, body, deleted: false };
+  }
+
+  // Ancestors of `message`, oldest first, ending with its immediate parent.
+  // Each entry is { id, senderName, body, deleted }. The walk stops at the
+  // first message that can't be found (shown as "[deleted message]") or at
+  // the root of the chain.
+  function buildReplyChain(message) {
+    const chain = [];
+    const ref = getReplyRef(message);
+    if (!ref) return chain;
+    const parentId = message.replied_to_message_id;
+    if (ref.deleted) return [{ id: parentId, senderName: '', body: '', deleted: true }];
+    chain.push({ id: parentId, senderName: ref.senderName, body: ref.body, deleted: false });
+
+    const byId = (id) => messages.find((m) => Number(m.id) === Number(id));
+    let current = byId(parentId);
+    while (current && current.replied_to_message_id) {
+      const original = byId(current.replied_to_message_id);
+      chain.unshift(toReplyTarget(current.replied_to_message_id, original));
+      if (!original) break;
+      current = original;
+    }
+    return chain;
+  }
+
+  // Chain shown in the reply box: the ancestors of the message being replied
+  // to, then that message itself.
+  const replyBoxChain = (() => {
+    if (!replyingTo) return null;
+    const target = messages.find((m) => Number(m.id) === Number(replyingTo.id));
+    return target ? [...buildReplyChain(target), replyingTo] : [replyingTo];
+  })();
+
+  function focusInput() {
+    setTimeout(() => inputRef.current?.focus(), 0);
+  }
+
+  // Writes the draft (or removes it, if this same reply's text was emptied).
+  function persistDraft(repliedId, text) {
+    if (text.trim()) {
+      localStorage.setItem(
+        draftKey(conversationId),
+        JSON.stringify({ replied_to_message_id: repliedId, body: text, timestamp: Date.now() })
+      );
+      setHasDraft(true);
+      return;
+    }
+    const stored = readJson(draftKey(conversationId), null);
+    if (stored && Number(stored.replied_to_message_id) === Number(repliedId)) {
+      localStorage.removeItem(draftKey(conversationId));
+      setHasDraft(false);
+    }
+  }
+
+  function clearDraft() {
+    localStorage.removeItem(draftKey(conversationId));
+    setHasDraft(false);
+  }
+
+  async function restoreDraft(draft) {
+    const id = draft.replied_to_message_id;
+    setInputText(draft.body);
+    let original = messages.find((m) => Number(m.id) === Number(id));
+    if (!original) {
+      // Older than the loaded page: `before` is exclusive, so before=id+1, limit=1 is that message.
+      try {
+        const [found] = await getMessages(conversationId, { before: Number(id) + 1, limit: 1 });
+        if (found && Number(found.id) === Number(id)) original = found;
+      } catch {
+        // leave original undefined; falls back to "[deleted message]"
+      }
+    }
+    setReplyingTo(toReplyTarget(id, original));
+    focusInput();
+  }
+
+  // Restore an existing draft once, right after history loads.
+  useEffect(() => {
+    if (isLoading || restoredDraftRef.current) return;
+    restoredDraftRef.current = true;
+    const draft = readJson(draftKey(conversationId), null);
+    if (draft) restoreDraft(draft);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading]);
+
+  // Auto-save the draft 500ms after the last keystroke while in reply mode.
+  useEffect(() => {
+    if (!replyingTo) return undefined;
+    const timer = setTimeout(() => persistDraft(replyingTo.id, inputText), 500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [replyingTo, inputText]);
+
+  // Typing followed quickly by closing the tab (or switching conversation,
+  // which unmounts this component) shouldn't lose the last <500ms of text.
+  useEffect(() => {
+    latestReplyStateRef.current = { replyingTo, inputText };
+  }, [replyingTo, inputText]);
+
+  useEffect(() => {
+    function flush() {
+      const { replyingTo: target, inputText: text } = latestReplyStateRef.current;
+      if (target && text.trim()) persistDraft(target.id, text);
+    }
+    window.addEventListener('beforeunload', flush);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      window.removeEventListener('beforeunload', flush);
+      window.removeEventListener('pagehide', flush);
+      flush();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // SocketContext flushes the offline queue on reconnect and pings this.
+  useEffect(() => {
+    const refresh = () => setPending(readJson(pendingKey(conversationId), []));
+    window.addEventListener('wisper:pending-changed', refresh);
+    return () => window.removeEventListener('wisper:pending-changed', refresh);
+  }, [conversationId]);
+
+  useEffect(() => () => clearTimeout(flashTimerRef.current), []);
+
+  function handleReply(message) {
+    setReplyingTo(toReplyTarget(message.id, message));
+    setSendError('');
+    focusInput();
+  }
+
+  // Closing reply mode keeps whatever was typed as a draft (or drops the
+  // draft if there was nothing typed), then empties the input so the text
+  // can't be sent as a plain message by accident.
+  function handleCancelReply() {
+    if (replyingTo) persistDraft(replyingTo.id, inputText);
+    setReplyingTo(null);
+    setInputText('');
+    setSendError('');
+  }
+
+  function handleDraftPillClick() {
+    if (replyingTo) {
+      focusInput();
+      return;
+    }
+    const draft = readJson(draftKey(conversationId), null);
+    if (draft) restoreDraft(draft);
+  }
+
+  function jumpToMessage(id) {
+    const el = scrollRef.current?.querySelector(`[data-message-id="${id}"]`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setFlashId(Number(id));
+    clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => setFlashId(null), 1600);
+  }
+
+  function finishReply() {
+    clearDraft();
+    setReplyingTo(null);
+    setInputText('');
+    setSendError('');
+  }
+
   function handleSend(body) {
-    socket?.emit('send_message', { conversationId, body });
+    // Plain messages: unchanged behavior (fire and forget, echo renders it).
+    if (!replyingTo) {
+      socket?.emit('send_message', { conversationId, body });
+      setInputText('');
+      return;
+    }
+
+    const repliedId = replyingTo.id;
+    setSendError('');
+
+    if (!socket?.connected) {
+      const queue = readJson(pendingKey(conversationId), []);
+      queue.push({ body, replied_to_message_id: repliedId, timestamp: Date.now() });
+      localStorage.setItem(pendingKey(conversationId), JSON.stringify(queue));
+      setPending(queue);
+      finishReply();
+      return;
+    }
+
+    setIsSending(true);
+    socket
+      .timeout(10000)
+      .emit('send_message', { conversationId, body, replied_to_message_id: repliedId }, (err, res) => {
+        setIsSending(false);
+        if (err || !res || !res.ok) {
+          // Keep the draft and reply mode so nothing typed is lost.
+          setSendError((res && res.error) || 'Could not send your reply. Your draft is saved.');
+          persistDraft(repliedId, body);
+          return;
+        }
+        finishReply();
+      });
   }
 
   const lastMineIndex = messages
@@ -332,6 +576,33 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
                 highlightTerms={
                   currentMatch && Number(currentMatch.id) === Number(message.id) ? activeTerms : null
                 }
+                replyChain={buildReplyChain(message)}
+                onReplyClick={jumpToMessage}
+                onReply={handleReply}
+                flash={flashId === Number(message.id)}
+              />
+            );
+          })}
+
+        {!isLoading &&
+          !loadError &&
+          pending.map((p) => {
+            const pendingMessage = {
+              id: `pending-${p.timestamp}`,
+              sender_id: currentUserId,
+              body: p.body,
+              created_at: new Date(p.timestamp).toISOString(),
+              replied_to_message_id: p.replied_to_message_id,
+            };
+            return (
+              <MessageBubble
+                key={pendingMessage.id}
+                message={pendingMessage}
+                isMine
+                showSeen={false}
+                replyChain={buildReplyChain(pendingMessage)}
+                onReplyClick={jumpToMessage}
+                pending
               />
             );
           })}
@@ -339,7 +610,25 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
         <div ref={bottomRef} />
       </div>
 
-      <MessageInput onSend={handleSend} disabled={!isSocketConnected} />
+      {hasDraft && (
+        <button type="button" className="draft-pill" onClick={handleDraftPillClick}>
+          📝 Draft reply saved
+        </button>
+      )}
+      {sendError && <div className="banner banner-error reply-send-error">{sendError}</div>}
+
+      <MessageInput
+        value={inputText}
+        onChange={setInputText}
+        onSend={handleSend}
+        // Replies may be composed (and queued) while offline; plain messages may not.
+        disabled={!isSocketConnected && !replyingTo}
+        isSending={isSending}
+        replyingTo={replyingTo}
+        replyChain={replyBoxChain}
+        onCancelReply={handleCancelReply}
+        inputRef={inputRef}
+      />
     </div>
   );
 }

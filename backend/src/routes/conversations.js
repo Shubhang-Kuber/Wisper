@@ -131,20 +131,28 @@ router.get('/:id/messages', authenticateToken, async (req, res) => {
     const limit = Math.min(Math.max(parsedLimit > 0 ? parsedLimit : 20, 1), 100);
     const before = req.query.before;
 
+    // replied_* come from joining the original message (and its sender), so
+    // the frontend can render the reply preview without a second fetch —
+    // even when the original is older than the loaded page.
+    const columns = `m.id, m.sender_id, m.body, m.created_at, m.replied_to_message_id,
+                     r.body AS replied_body, r.sender_id AS replied_sender_id, ru.username AS replied_sender_username`;
+    const joins = `LEFT JOIN messages r ON r.id = m.replied_to_message_id
+                   LEFT JOIN users ru ON ru.id = r.sender_id`;
+
     let rows;
     if (before) {
       [rows] = await pool.query(
-        `SELECT id, sender_id, body, created_at FROM messages
-         WHERE conversation_id = ? AND id < ?
-         ORDER BY created_at DESC
+        `SELECT ${columns} FROM messages m ${joins}
+         WHERE m.conversation_id = ? AND m.id < ?
+         ORDER BY m.created_at DESC
          LIMIT ?`,
         [conversationId, before, limit]
       );
     } else {
       [rows] = await pool.query(
-        `SELECT id, sender_id, body, created_at FROM messages
-         WHERE conversation_id = ?
-         ORDER BY created_at DESC
+        `SELECT ${columns} FROM messages m ${joins}
+         WHERE m.conversation_id = ?
+         ORDER BY m.created_at DESC
          LIMIT ?`,
         [conversationId, limit]
       );

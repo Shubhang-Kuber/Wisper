@@ -106,23 +106,58 @@ module.exports = function setupSockets(io, pool) {
     //      and what text, never who.
     //   2. Being authenticated doesn't imply membership in this specific
     //      conversation — that's checked independently, every time.
-    socket.on('send_message', async ({ conversationId, body } = {}) => {
+    //
+    // Reply support: an optional `replied_to_message_id` links this message
+    // to an earlier one in the same conversation (originals only — no
+    // reply-to-reply chains). An optional acknowledgement callback lets the
+    // sender know whether the write succeeded; clients that don't pass one
+    // behave exactly as before.
+    socket.on('send_message', async ({ conversationId, body, replied_to_message_id } = {}, ack) => {
+      const reply = (payload) => {
+        if (typeof ack === 'function') ack(payload);
+      };
+      const fail = (message) => {
+        socket.emit('error', { message });
+        reply({ ok: false, error: message });
+      };
+
       try {
         const authorized = await isParticipant(pool, conversationId, socket.userId);
 
         if (!authorized) {
-          socket.emit('error', { message: 'Not a participant in this conversation' });
+          fail('Not a participant in this conversation');
           return;
+        }
+
+        const repliedTo = replied_to_message_id ?? null;
+        if (repliedTo !== null) {
+          const [targetRows] = await pool.query(
+            'SELECT replied_to_message_id FROM messages WHERE id = ? AND conversation_id = ?',
+            [repliedTo, conversationId]
+          );
+          if (targetRows.length === 0) {
+            fail('The message you are replying to no longer exists');
+            return;
+          }
+          if (targetRows[0].replied_to_message_id !== null) {
+            fail('You cannot reply to a reply');
+            return;
+          }
         }
 
         // Write to MySQL first...
         const [result] = await pool.query(
-          'INSERT INTO messages (conversation_id, sender_id, body) VALUES (?, ?, ?)',
-          [conversationId, socket.userId, body]
+          'INSERT INTO messages (conversation_id, sender_id, body, replied_to_message_id) VALUES (?, ?, ?, ?)',
+          [conversationId, socket.userId, body, repliedTo]
         );
 
         const [rows] = await pool.query(
-          'SELECT id, conversation_id, sender_id, body, created_at FROM messages WHERE id = ?',
+          `SELECT m.id, m.conversation_id, m.sender_id, m.body, m.created_at, m.replied_to_message_id,
+                  r.body AS replied_body, r.sender_id AS replied_sender_id, ru.username AS replied_sender_username
+           FROM messages m
+           LEFT JOIN messages r ON r.id = m.replied_to_message_id
+           LEFT JOIN users ru ON ru.id = r.sender_id
+           WHERE m.id = ?`,
           [result.insertId]
         );
         const message = rows[0];
@@ -130,9 +165,10 @@ module.exports = function setupSockets(io, pool) {
         // ...and only broadcast once the write has succeeded, so nobody
         // ever sees a message over the socket that isn't actually durable.
         io.to(roomName(conversationId)).emit('new_message', message);
+        reply({ ok: true, id: message.id });
       } catch (err) {
         console.error('send_message error:', err.message);
-        socket.emit('error', { message: 'Something went wrong, please try again' });
+        fail('Something went wrong, please try again');
       }
     });
 
