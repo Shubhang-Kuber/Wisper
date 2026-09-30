@@ -46,6 +46,9 @@ const createPin = (conversationId, messageId, expiryDays) =>
 const deletePin = (conversationId, pinId) =>
   client.delete(`/conversations/${conversationId}/pin/${pinId}`);
 const deleteAllPins = (conversationId) => client.delete(`/conversations/${conversationId}/pins`);
+// Message delete endpoint. deleteType is "everyone" or "me".
+const deleteMessage = (conversationId, messageId, deleteType) =>
+  client.post(`/conversations/${conversationId}/delete/${messageId}`, { delete_type: deleteType });
 
 const TOAST_MS = 2600;
 
@@ -175,14 +178,35 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
       setOtherLastReadAt(payload.readAt);
     }
 
+    // Message ids are unique across conversations, so an event for a message
+    // that isn't in this thread simply matches nothing.
+    function handleMessageDeleted(payload) {
+      if (payload?.delete_type !== 'everyone') return;
+      markMessageDeleted(payload.message_id);
+    }
+
     socket.on('new_message', handleNewMessage);
     socket.on('conversation_read', handleConversationRead);
+    socket.on('message_deleted', handleMessageDeleted);
 
     return () => {
       socket.off('new_message', handleNewMessage);
       socket.off('conversation_read', handleConversationRead);
+      socket.off('message_deleted', handleMessageDeleted);
     };
   }, [socket, conversationId, currentUserId]);
+
+  // Shows a message as deleted for everyone. Replies to it drop their cached
+  // quote too, so the preview reads as a deleted message instead of the old text.
+  function markMessageDeleted(messageId) {
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (Number(m.id) === Number(messageId)) return { ...m, is_deleted: true, body: null };
+        if (Number(m.replied_to_message_id) === Number(messageId)) return { ...m, replied_body: null };
+        return m;
+      })
+    );
+  }
 
   // Snap to bottom the moment history finishes loading...
   useEffect(() => {
@@ -591,6 +615,24 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
     else showToast('Could not find that message');
   }
 
+  async function handleDelete(message, deleteType) {
+    try {
+      await deleteMessage(conversationId, message.id, deleteType);
+      if (deleteType === 'me') {
+        // Local only: the other participant still sees it, other tabs until refresh.
+        setMessages((prev) => prev.filter((m) => Number(m.id) !== Number(message.id)));
+        showToast('Message deleted for you only');
+      } else {
+        // The message_deleted socket event updates both participants; applying it
+        // here as well is idempotent and covers a dropped socket.
+        markMessageDeleted(message.id);
+        showToast('Message deleted for everyone');
+      }
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Could not delete message'));
+    }
+  }
+
   function handlePinItemContextMenu(e, pin) {
     e.preventDefault();
     e.stopPropagation(); // keep the document-level close handler from closing it straight away
@@ -774,6 +816,7 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
                 onReplyClick={jumpToMessage}
                 onReply={handleReply}
                 onPin={handlePin}
+                onDelete={handleDelete}
                 isPinned={activePinnedMessageIds.has(Number(message.id))}
                 flash={flashId === Number(message.id)}
               />

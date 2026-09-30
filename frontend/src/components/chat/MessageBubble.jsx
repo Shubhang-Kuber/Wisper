@@ -58,6 +58,11 @@ const PIN_OPTIONS = [
 ];
 // Width the context menu plus its submenu need; past this the submenu opens leftwards.
 const SUBMENU_FLIP_WIDTH = 320;
+// Delete additions (optional): `onDelete(message, deleteType)` enables the Delete
+// submenu ("everyone" | "me"). "Delete for everyone" is disabled unless the
+// message is yours, and hidden once it is older than this (the server enforces
+// the same limit with TIMESTAMPDIFF(HOUR) <= 60).
+const DELETE_FOR_EVERYONE_HOURS = 60;
 
 export default function MessageBubble({
   message,
@@ -68,12 +73,14 @@ export default function MessageBubble({
   onReplyClick,
   onReply,
   onPin,
+  onDelete,
   isPinned,
   pending,
   flash,
 }) {
   const [menu, setMenu] = useState(null);
   const [isPinSubmenuOpen, setIsPinSubmenuOpen] = useState(false);
+  const [isDeleteSubmenuOpen, setIsDeleteSubmenuOpen] = useState(false);
 
   useEffect(() => {
     if (!menu) return undefined;
@@ -100,8 +107,14 @@ export default function MessageBubble({
     e.preventDefault();
     e.stopPropagation(); // keep the document-level close handler from closing it straight away
     setIsPinSubmenuOpen(false);
+    setIsDeleteSubmenuOpen(false);
     setMenu({ x: e.clientX, y: e.clientY });
   }
+
+  const isDeleted = Boolean(message.is_deleted);
+  const ageHours = (Date.now() - new Date(message.created_at).getTime()) / 3600000;
+  const showDeleteForEveryone = Math.floor(ageHours) <= DELETE_FOR_EVERYONE_HOURS;
+  const canDeleteForEveryone = isMine && !isDeleted;
 
   return (
     <div
@@ -131,11 +144,15 @@ export default function MessageBubble({
             ))}
           </div>
         )}
-        <p className="message-body">
-          {highlightTerms && highlightTerms.length > 0
-            ? renderHighlighted(message.body, highlightTerms)
-            : message.body}
-        </p>
+        {isDeleted ? (
+          <p className="message-body message-body-deleted">[deleted message]</p>
+        ) : (
+          <p className="message-body">
+            {highlightTerms && highlightTerms.length > 0
+              ? renderHighlighted(message.body, highlightTerms)
+              : message.body}
+          </p>
+        )}
         {pending ? (
           <span className="message-time message-pending">⏳ Pending</span>
         ) : (
@@ -150,6 +167,7 @@ export default function MessageBubble({
               <button
                 type="button"
                 role="menuitem"
+                disabled={isDeleted}
                 onClick={() => onReply(message)}
               >
                 Reply
@@ -158,7 +176,7 @@ export default function MessageBubble({
             <li
               role="none"
               className="message-context-menu-parent"
-              onMouseEnter={() => onPin && setIsPinSubmenuOpen(true)}
+              onMouseEnter={() => onPin && !isDeleted && setIsPinSubmenuOpen(true)}
               onMouseLeave={() => setIsPinSubmenuOpen(false)}
             >
               <button
@@ -166,7 +184,7 @@ export default function MessageBubble({
                 role="menuitem"
                 aria-haspopup="menu"
                 aria-expanded={isPinSubmenuOpen}
-                disabled={!onPin}
+                disabled={!onPin || isDeleted}
                 onClick={(e) => {
                   e.stopPropagation(); // Pin only opens the submenu; don't let the document handler close the menu
                   setIsPinSubmenuOpen((open) => !open);
@@ -177,7 +195,7 @@ export default function MessageBubble({
                   ›
                 </span>
               </button>
-              {onPin && isPinSubmenuOpen && (
+              {onPin && !isDeleted && isPinSubmenuOpen && (
                 <ul
                   className={`message-context-menu message-context-submenu${
                     menu.x + SUBMENU_FLIP_WIDTH > window.innerWidth ? ' flip' : ''
@@ -194,10 +212,59 @@ export default function MessageBubble({
                 </ul>
               )}
             </li>
-            <li role="none">
-              <button type="button" role="menuitem" disabled>
+            <li
+              role="none"
+              className="message-context-menu-parent"
+              onMouseEnter={() => onDelete && setIsDeleteSubmenuOpen(true)}
+              onMouseLeave={() => setIsDeleteSubmenuOpen(false)}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                aria-haspopup="menu"
+                aria-expanded={isDeleteSubmenuOpen}
+                disabled={!onDelete}
+                onClick={(e) => {
+                  e.stopPropagation(); // Delete only opens the submenu; don't let the document handler close the menu
+                  setIsDeleteSubmenuOpen((open) => !open);
+                }}
+              >
                 Delete
+                <span className="message-context-menu-arrow" aria-hidden="true">
+                  ›
+                </span>
               </button>
+              {onDelete && isDeleteSubmenuOpen && (
+                <ul
+                  className={`message-context-menu message-context-submenu${
+                    menu.x + SUBMENU_FLIP_WIDTH > window.innerWidth ? ' flip' : ''
+                  }`}
+                  role="menu"
+                >
+                  {showDeleteForEveryone && (
+                    <li role="none">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={!canDeleteForEveryone}
+                        onClick={() => onDelete(message, 'everyone')}
+                      >
+                        Delete for everyone
+                      </button>
+                    </li>
+                  )}
+                  <li role="none">
+                    <button type="button" role="menuitem" onClick={() => onDelete(message, 'me')}>
+                      Delete for me only
+                    </button>
+                  </li>
+                  <li role="none">
+                    <button type="button" role="menuitem">
+                      Cancel
+                    </button>
+                  </li>
+                </ul>
+              )}
             </li>
           </ul>,
           document.body

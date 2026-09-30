@@ -133,31 +133,44 @@ router.get('/:id/messages', authenticateToken, async (req, res) => {
 
     // replied_* come from joining the original message (and its sender), so
     // the frontend can render the reply preview without a second fetch —
-    // even when the original is older than the loaded page.
-    const columns = `m.id, m.sender_id, m.body, m.created_at, m.replied_to_message_id,
-                     r.body AS replied_body, r.sender_id AS replied_sender_id, ru.username AS replied_sender_username`;
+    // even when the original is older than the loaded page. replied_body is
+    // NULL when the original was deleted for everyone or hidden by the
+    // requester, which the frontend already renders as a deleted quote.
+    // Messages the requester deleted "for me" (their id in deleted_by_users)
+    // are left out entirely. Messages deleted for everyone stay in the list as
+    // tombstones (is_deleted, body null) so the thread shows "[deleted message]".
+    const requesterJson = `CAST(? AS JSON)`;
+    const columns = `m.id, m.sender_id, m.body, m.created_at, m.replied_to_message_id, m.is_deleted,
+                     CASE WHEN r.is_deleted OR JSON_CONTAINS(COALESCE(r.deleted_by_users, JSON_ARRAY()), ${requesterJson})
+                          THEN NULL ELSE r.body END AS replied_body,
+                     r.sender_id AS replied_sender_id, ru.username AS replied_sender_username`;
     const joins = `LEFT JOIN messages r ON r.id = m.replied_to_message_id
                    LEFT JOIN users ru ON ru.id = r.sender_id`;
+    const notHiddenForMe = `NOT JSON_CONTAINS(COALESCE(m.deleted_by_users, JSON_ARRAY()), ${requesterJson})`;
 
     let rows;
     if (before) {
       [rows] = await pool.query(
         `SELECT ${columns} FROM messages m ${joins}
-         WHERE m.conversation_id = ? AND m.id < ?
+         WHERE m.conversation_id = ? AND m.id < ? AND ${notHiddenForMe}
          ORDER BY m.created_at DESC
          LIMIT ?`,
-        [conversationId, before, limit]
+        [req.userId, conversationId, before, req.userId, limit]
       );
     } else {
       [rows] = await pool.query(
         `SELECT ${columns} FROM messages m ${joins}
-         WHERE m.conversation_id = ?
+         WHERE m.conversation_id = ? AND ${notHiddenForMe}
          ORDER BY m.created_at DESC
          LIMIT ?`,
-        [conversationId, limit]
+        [req.userId, conversationId, req.userId, limit]
       );
     }
 
+    rows = rows.map((row) => {
+      const isDeleted = Boolean(row.is_deleted);
+      return { ...row, is_deleted: isDeleted, body: isDeleted ? null : row.body };
+    });
     rows.reverse();
 
     return res.status(200).json({ messages: rows });
@@ -434,6 +447,91 @@ router.delete('/:id/pins', authenticateToken, async (req, res) => {
     return res.status(200).json({ success: true, deleted: result.affectedRows });
   } catch (err) {
     console.error('Delete all pins error:', err);
+    return res.status(500).json({ error: 'Something went wrong, please try again' });
+  }
+});
+
+// POST /api/conversations/:id/delete/:message_id
+// Body: { delete_type: "everyone" | "me" }.
+//  - "everyone": soft delete (is_deleted, deleted_at, body cleared). Sender only,
+//    and only within DELETE_FOR_EVERYONE_HOURS of sending. Emits `message_deleted`.
+//  - "me": appends the requester's id to deleted_by_users, so only they stop
+//    seeing it. Any participant, no time limit, no socket event. The row is
+//    shared with the other participant, so it is never physically removed.
+// body is NOT NULL in the schema, so "cleared" is '' in the table; GET returns
+// null for it.
+const DELETE_FOR_EVERYONE_HOURS = 60;
+
+router.post('/:id/delete/:message_id', authenticateToken, async (req, res) => {
+  const conversationId = req.params.id;
+  const messageId = Number(req.params.message_id);
+  const deleteType = req.body && req.body.delete_type;
+
+  if (deleteType !== 'everyone' && deleteType !== 'me') {
+    return res.status(400).json({ error: 'delete_type must be "everyone" or "me"' });
+  }
+  if (!Number.isInteger(messageId) || messageId <= 0) {
+    return res.status(400).json({ error: 'Invalid message id' });
+  }
+
+  try {
+    if (!(await isParticipant(conversationId, req.userId))) {
+      return res.status(403).json({ error: 'You are not a participant in this conversation' });
+    }
+
+    const [messageRows] = await pool.query(
+      `SELECT sender_id, is_deleted, TIMESTAMPDIFF(HOUR, created_at, NOW()) AS age_hours
+       FROM messages WHERE id = ? AND conversation_id = ?`,
+      [messageId, conversationId]
+    );
+    if (messageRows.length === 0) {
+      return res.status(404).json({ error: 'Message not found in this conversation' });
+    }
+    const message = messageRows[0];
+
+    if (deleteType === 'everyone') {
+      if (Number(message.sender_id) !== Number(req.userId)) {
+        return res.status(403).json({ error: 'Only the sender can delete a message for everyone' });
+      }
+      if (message.age_hours > DELETE_FOR_EVERYONE_HOURS) {
+        return res
+          .status(400)
+          .json({ error: `Cannot delete message older than ${DELETE_FOR_EVERYONE_HOURS} hours` });
+      }
+      if (message.is_deleted) {
+        return res.status(400).json({ error: 'Message is already deleted' });
+      }
+
+      await pool.query(
+        `UPDATE messages SET is_deleted = TRUE, deleted_at = NOW(), body = ''
+         WHERE id = ? AND conversation_id = ?`,
+        [messageId, conversationId]
+      );
+
+      const io = req.app.get('io');
+      if (io) {
+        io.to(`conversation:${conversationId}`).emit('message_deleted', {
+          message_id: messageId,
+          delete_type: 'everyone',
+        });
+      }
+
+      return res.status(200).json({ success: true, delete_type: 'everyone' });
+    }
+
+    // Single statement, and skipped when the id is already in the array, so a
+    // repeated request can't add a duplicate.
+    await pool.query(
+      `UPDATE messages
+       SET deleted_by_users = JSON_ARRAY_APPEND(COALESCE(deleted_by_users, JSON_ARRAY()), '$', ?)
+       WHERE id = ? AND conversation_id = ?
+         AND NOT JSON_CONTAINS(COALESCE(deleted_by_users, JSON_ARRAY()), CAST(? AS JSON))`,
+      [req.userId, messageId, conversationId, req.userId]
+    );
+
+    return res.status(200).json({ success: true, delete_type: 'me' });
+  } catch (err) {
+    console.error('Delete message error:', err);
     return res.status(500).json({ error: 'Something went wrong, please try again' });
   }
 });
