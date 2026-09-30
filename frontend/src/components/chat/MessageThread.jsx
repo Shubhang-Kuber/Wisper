@@ -45,6 +45,7 @@ const createPin = (conversationId, messageId, expiryDays) =>
     .then((res) => res.data);
 const deletePin = (conversationId, pinId) =>
   client.delete(`/conversations/${conversationId}/pin/${pinId}`);
+const deleteAllPins = (conversationId) => client.delete(`/conversations/${conversationId}/pins`);
 
 const TOAST_MS = 2600;
 
@@ -108,7 +109,8 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
   const [isPinsOpen, setIsPinsOpen] = useState(false);
   const [isPinsLoading, setIsPinsLoading] = useState(false);
   const [pinsError, setPinsError] = useState('');
-  const [pinMenu, setPinMenu] = useState(null); // { x, y, pin } — right-click "Unpin" menu inside the modal
+  const [isUnpinningAll, setIsUnpinningAll] = useState(false);
+  const [pinMenu, setPinMenu] = useState(null); //{ x, y, pin } — right-click "Unpin" menu inside the modal
   const [toast, setToast] = useState('');
 
   const toastTimerRef = useRef(null);
@@ -543,6 +545,19 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
     }
   }
 
+  async function handleUnpinAll() {
+    setIsUnpinningAll(true);
+    try {
+      await deleteAllPins(conversationId);
+      setPins([]);
+      showToast('All messages unpinned');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Could not unpin messages'));
+    } finally {
+      setIsUnpinningAll(false);
+    }
+  }
+
   // Scroll to a pinned message. Initial history is just the latest page, so if
   // the message is older than what is loaded, page older history in (existing
   // `before` cursor) until it is, then jump and flash it like a reply jump.
@@ -822,14 +837,26 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
             <div className="pins-modal" role="dialog" aria-modal="true" aria-label="Pinned messages">
               <div className="pins-modal-header">
                 <h3>Pinned messages</h3>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  onClick={closePins}
-                  aria-label="Close pinned messages"
-                >
-                  ✕
-                </button>
+                <div className="pins-modal-actions">
+                  {pins.length > 0 && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={handleUnpinAll}
+                      disabled={isUnpinningAll}
+                    >
+                      Unpin all
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={closePins}
+                    aria-label="Close pinned messages"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
 
               {isPinsLoading && (

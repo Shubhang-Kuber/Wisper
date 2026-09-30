@@ -415,4 +415,27 @@ router.delete('/:id/pin/:pin_id', authenticateToken, async (req, res) => {
   }
 });
 
+// DELETE /api/conversations/:id/pins
+// Removes every pin (active and expired) in the conversation. Either
+// participant may do this, matching single unpin. Succeeds with deleted: 0
+// when there was nothing to remove.
+router.delete('/:id/pins', authenticateToken, async (req, res) => {
+  const conversationId = req.params.id;
+
+  try {
+    if (!(await isParticipant(conversationId, req.userId))) {
+      return res.status(403).json({ error: 'You are not a participant in this conversation' });
+    }
+
+    const [result] = await pool.query('DELETE FROM pinned_messages WHERE conversation_id = ?', [
+      conversationId,
+    ]);
+
+    return res.status(200).json({ success: true, deleted: result.affectedRows });
+  } catch (err) {
+    console.error('Delete all pins error:', err);
+    return res.status(500).json({ error: 'Something went wrong, please try again' });
+  }
+});
+
 module.exports = router;

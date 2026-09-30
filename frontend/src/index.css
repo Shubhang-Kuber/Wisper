@@ -1458,6 +1458,12 @@ a {
   justify-content: space-between;
 }
 
+.pins-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .pins-modal-header h3 {
   margin: 0;
   font-size: 16px;
