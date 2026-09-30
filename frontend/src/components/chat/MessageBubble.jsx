@@ -47,6 +47,18 @@ function renderHighlighted(body, terms) {
 // quoted chain and `onReplyClick(id)` jumps to a quoted message; `onReply` enables the right-click
 // menu (omitted for pending messages); `pending` swaps the time for a
 // "Pending" marker; `flash` briefly pulses the bubble after a jump.
+//
+// Pin additions (optional): `onPin(message, days)` enables the Pin submenu in
+// the right-click menu; `isPinned` shows a pin icon on the bubble (active
+// pins only — MessageThread decides).
+const PIN_OPTIONS = [
+  { days: 1, label: 'Pin for 1 day' },
+  { days: 7, label: 'Pin for 7 days' },
+  { days: 30, label: 'Pin for 1 month' },
+];
+// Width the context menu plus its submenu need; past this the submenu opens leftwards.
+const SUBMENU_FLIP_WIDTH = 320;
+
 export default function MessageBubble({
   message,
   isMine,
@@ -55,10 +67,13 @@ export default function MessageBubble({
   replyChain,
   onReplyClick,
   onReply,
+  onPin,
+  isPinned,
   pending,
   flash,
 }) {
   const [menu, setMenu] = useState(null);
+  const [isPinSubmenuOpen, setIsPinSubmenuOpen] = useState(false);
 
   useEffect(() => {
     if (!menu) return undefined;
@@ -84,6 +99,7 @@ export default function MessageBubble({
     if (!onReply) return;
     e.preventDefault();
     e.stopPropagation(); // keep the document-level close handler from closing it straight away
+    setIsPinSubmenuOpen(false);
     setMenu({ x: e.clientX, y: e.clientY });
   }
 
@@ -94,6 +110,11 @@ export default function MessageBubble({
       onContextMenu={handleContextMenu}
     >
       <div className="message-bubble">
+        {isPinned && (
+          <span className="message-pin-icon" role="img" aria-label="Pinned">
+            📌
+          </span>
+        )}
         {replyChain && replyChain.length > 0 && (
           <div className="reply-chain">
             {replyChain.map((quote) => (
@@ -134,10 +155,44 @@ export default function MessageBubble({
                 Reply
               </button>
             </li>
-            <li role="none">
-              <button type="button" role="menuitem" disabled>
+            <li
+              role="none"
+              className="message-context-menu-parent"
+              onMouseEnter={() => onPin && setIsPinSubmenuOpen(true)}
+              onMouseLeave={() => setIsPinSubmenuOpen(false)}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                aria-haspopup="menu"
+                aria-expanded={isPinSubmenuOpen}
+                disabled={!onPin}
+                onClick={(e) => {
+                  e.stopPropagation(); // Pin only opens the submenu; don't let the document handler close the menu
+                  setIsPinSubmenuOpen((open) => !open);
+                }}
+              >
                 Pin
+                <span className="message-context-menu-arrow" aria-hidden="true">
+                  ›
+                </span>
               </button>
+              {onPin && isPinSubmenuOpen && (
+                <ul
+                  className={`message-context-menu message-context-submenu${
+                    menu.x + SUBMENU_FLIP_WIDTH > window.innerWidth ? ' flip' : ''
+                  }`}
+                  role="menu"
+                >
+                  {PIN_OPTIONS.map(({ days, label }) => (
+                    <li key={days} role="none">
+                      <button type="button" role="menuitem" onClick={() => onPin(message, days)}>
+                        {label}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </li>
             <li role="none">
               <button type="button" role="menuitem" disabled>

@@ -252,4 +252,167 @@ router.post('/:id/read', authenticateToken, async (req, res) => {
   }
 });
 
+// --- Message pins -----------------------------------------------------------
+// Pins are shared by both participants and fetched on demand (no socket
+// events). expires_at is the source of truth for "active": the stored
+// is_active column is never flipped when a pin lapses, so every active/expired
+// check below compares expires_at with NOW() instead of reading is_active.
+const MAX_ACTIVE_PINS = 5;
+const PIN_EXPIRY_DAYS = [1, 7, 30];
+
+async function isParticipant(conversationId, userId) {
+  const [rows] = await pool.query(
+    'SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?',
+    [conversationId, userId]
+  );
+  return rows.length > 0;
+}
+
+// POST /api/conversations/:id/pin
+// Body: { message_id, expiry_days } with expiry_days one of 1, 7, 30.
+router.post('/:id/pin', authenticateToken, async (req, res) => {
+  const conversationId = req.params.id;
+  const messageId = Number(req.body.message_id);
+  const expiryDays = Number(req.body.expiry_days);
+
+  if (!Number.isInteger(messageId) || messageId <= 0) {
+    return res.status(400).json({ error: 'message_id is required' });
+  }
+  if (!PIN_EXPIRY_DAYS.includes(expiryDays)) {
+    return res.status(400).json({ error: 'expiry_days must be 1, 7, or 30' });
+  }
+
+  try {
+    if (!(await isParticipant(conversationId, req.userId))) {
+      return res.status(403).json({ error: 'You are not a participant in this conversation' });
+    }
+
+    const [messageRows] = await pool.query(
+      'SELECT 1 FROM messages WHERE id = ? AND conversation_id = ?',
+      [messageId, conversationId]
+    );
+    if (messageRows.length === 0) {
+      return res.status(404).json({ error: 'Message not found in this conversation' });
+    }
+
+    const connection = await pool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+
+      // Serialise pins per conversation so two simultaneous requests can't
+      // both pass the count check and push the conversation past the cap.
+      await connection.query('SELECT id FROM conversations WHERE id = ? FOR UPDATE', [conversationId]);
+
+      const [existing] = await connection.query(
+        'SELECT 1 FROM pinned_messages WHERE conversation_id = ? AND message_id = ?',
+        [conversationId, messageId]
+      );
+      if (existing.length > 0) {
+        await connection.rollback();
+        return res.status(409).json({ error: 'Message already pinned' });
+      }
+
+      const [[{ activeCount }]] = await connection.query(
+        `SELECT COUNT(*) AS activeCount FROM pinned_messages
+         WHERE conversation_id = ? AND expires_at > NOW()`,
+        [conversationId]
+      );
+      if (activeCount >= MAX_ACTIVE_PINS) {
+        await connection.rollback();
+        return res.status(400).json({ error: 'Maximum 5 pins reached. Unpin a message first.' });
+      }
+
+      const [result] = await connection.query(
+        `INSERT INTO pinned_messages (conversation_id, message_id, pinned_by_user_id, expires_at)
+         VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL ? DAY))`,
+        [conversationId, messageId, req.userId, expiryDays]
+      );
+
+      const [[pin]] = await connection.query(
+        `SELECT id, conversation_id, message_id, pinned_by_user_id, pinned_at, expires_at, is_active
+         FROM pinned_messages WHERE id = ?`,
+        [result.insertId]
+      );
+
+      await connection.commit();
+
+      return res.status(201).json({ ...pin, is_active: Boolean(pin.is_active) });
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    } finally {
+      connection.release();
+    }
+  } catch (err) {
+    console.error('Create pin error:', err);
+    return res.status(500).json({ error: 'Something went wrong, please try again' });
+  }
+});
+
+// GET /api/conversations/:id/pins
+// Every pin for the conversation, active first (newest pinned first), then
+// expired. Messages that no longer exist come back as "[deleted message]".
+router.get('/:id/pins', authenticateToken, async (req, res) => {
+  const conversationId = req.params.id;
+
+  try {
+    if (!(await isParticipant(conversationId, req.userId))) {
+      return res.status(403).json({ error: 'You are not a participant in this conversation' });
+    }
+
+    const [rows] = await pool.query(
+      `SELECT p.id, p.conversation_id, p.message_id, p.pinned_by_user_id, p.pinned_at, p.expires_at,
+              CASE WHEN p.expires_at < NOW() THEN FALSE ELSE TRUE END AS is_active,
+              m.id IS NULL AS message_deleted,
+              m.body, m.sender_id, m.created_at, u.username
+       FROM pinned_messages p
+       LEFT JOIN messages m ON p.message_id = m.id
+       LEFT JOIN users u ON m.sender_id = u.id
+       WHERE p.conversation_id = ?
+       ORDER BY CASE WHEN p.expires_at >= NOW() THEN 0 ELSE 1 END, p.pinned_at DESC, p.id DESC`,
+      [conversationId]
+    );
+
+    const pins = rows.map((row) => ({
+      ...row,
+      is_active: Boolean(row.is_active),
+      message_deleted: Boolean(row.message_deleted),
+      body: row.body ?? '[deleted message]',
+    }));
+
+    return res.status(200).json(pins);
+  } catch (err) {
+    console.error('List pins error:', err);
+    return res.status(500).json({ error: 'Something went wrong, please try again' });
+  }
+});
+
+// DELETE /api/conversations/:id/pin/:pin_id
+// Either participant can remove any pin in the conversation.
+router.delete('/:id/pin/:pin_id', authenticateToken, async (req, res) => {
+  const conversationId = req.params.id;
+  const pinId = req.params.pin_id;
+
+  try {
+    if (!(await isParticipant(conversationId, req.userId))) {
+      return res.status(403).json({ error: 'You are not a participant in this conversation' });
+    }
+
+    const [result] = await pool.query(
+      'DELETE FROM pinned_messages WHERE id = ? AND conversation_id = ?',
+      [pinId, conversationId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Pin not found' });
+    }
+
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    console.error('Delete pin error:', err);
+    return res.status(500).json({ error: 'Something went wrong, please try again' });
+  }
+});
+
 module.exports = router;

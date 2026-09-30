@@ -1377,3 +1377,229 @@ a {
   flex-shrink: 0;
   margin: 6px 18px 0;
 }
+
+/* ---------------------------------------------------------------------- */
+/* Message pins                                                           */
+/* ---------------------------------------------------------------------- */
+.message-pins-toggle {
+  padding: 8px 12px;
+  font-size: 13px;
+  gap: 6px;
+}
+
+.message-bubble {
+  position: relative;
+}
+
+.message-pin-icon {
+  position: absolute;
+  top: -8px;
+  right: -6px;
+  font-size: 13px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* Pin submenu: opens to the right of the "Pin" row, or to the left when
+   there isn't room (.flip, decided in MessageBubble). */
+.message-context-menu-parent {
+  position: relative;
+}
+
+.message-context-menu-parent > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.message-context-submenu {
+  position: absolute;
+  top: -5px;
+  left: 100%;
+  margin-left: 2px;
+  min-width: 150px;
+}
+
+.message-context-submenu.flip {
+  left: auto;
+  right: 100%;
+  margin-left: 0;
+  margin-right: 2px;
+}
+
+.pins-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(6, 10, 20, 0.6);
+}
+
+.pins-modal {
+  width: min(480px, 100%);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+
+.pins-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pins-modal-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.pins-status {
+  display: flex;
+  justify-content: center;
+  margin: 8px 0;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.pins-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.pins-item {
+  position: relative;
+}
+
+.pins-item-body {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 44px 10px 12px;
+  text-align: left;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), background-color 0.15s var(--ease);
+}
+
+.pins-item-body:hover:not(:disabled) {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.pins-item-body:disabled {
+  cursor: default;
+}
+
+.pins-item-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.pins-item-deleted .pins-item-text {
+  font-style: italic;
+  color: var(--text-faint);
+}
+
+.pins-item-expired .pins-item-text {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.pins-item-expired-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* Hidden until the row is hovered or focused; always shown on touch screens,
+   where there is no hover (and no right-click). */
+.pins-item-unpin {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.pins-item:hover .pins-item-unpin,
+.pins-item-unpin:focus-visible {
+  opacity: 1;
+}
+
+.pins-item-unpin:hover {
+  color: var(--accent);
+}
+
+@media (hover: none) {
+  .pins-item-unpin {
+    opacity: 1;
+  }
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  z-index: 1100;
+  max-width: calc(100vw - 32px);
+  padding: 10px 18px;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  box-shadow: 0 12px 32px -8px rgba(0, 0, 0, 0.5);
+  transform: translateX(-50%);
+  animation: toast-in 0.2s var(--ease);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}

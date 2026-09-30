@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal, flushSync } from 'react-dom';
+import client from '../../api/client';
 import { getMessages, searchMessages } from '../../api/conversations';
 import { getErrorMessage } from '../../utils/errors';
 import Avatar from './Avatar';
@@ -31,6 +33,28 @@ function readJson(key, fallback) {
   } catch {
     return fallback;
   }
+}
+
+// Pin endpoints (backend/src/routes/conversations.js). Kept next to their only
+// caller rather than in api/conversations.js.
+const fetchPins = (conversationId) =>
+  client.get(`/conversations/${conversationId}/pins`).then((res) => res.data);
+const createPin = (conversationId, messageId, expiryDays) =>
+  client
+    .post(`/conversations/${conversationId}/pin`, { message_id: messageId, expiry_days: expiryDays })
+    .then((res) => res.data);
+const deletePin = (conversationId, pinId) =>
+  client.delete(`/conversations/${conversationId}/pin/${pinId}`);
+
+const TOAST_MS = 2600;
+
+function PinIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 17v5" />
+      <path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z" />
+    </svg>
+  );
 }
 
 function SearchIcon() {
@@ -78,6 +102,16 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
   const [pending, setPending] = useState(() => readJson(pendingKey(conversationId), []));
   const [flashId, setFlashId] = useState(null);
 
+  // Pins: shared by both participants, fetched on demand (no socket events).
+  // Each entry is a GET /pins row: { id, message_id, body, is_active, message_deleted, ... }.
+  const [pins, setPins] = useState([]);
+  const [isPinsOpen, setIsPinsOpen] = useState(false);
+  const [isPinsLoading, setIsPinsLoading] = useState(false);
+  const [pinsError, setPinsError] = useState('');
+  const [pinMenu, setPinMenu] = useState(null); // { x, y, pin } — right-click "Unpin" menu inside the modal
+  const [toast, setToast] = useState('');
+
+  const toastTimerRef = useRef(null);
   const inputRef = useRef(null);
   const restoredDraftRef = useRef(false);
   const latestReplyStateRef = useRef({ replyingTo: null, inputText: '' });
@@ -458,6 +492,140 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
     flashTimerRef.current = setTimeout(() => setFlashId(null), 1600);
   }
 
+  function showToast(text) {
+    setToast(text);
+    clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(''), TOAST_MS);
+  }
+
+  function loadPins({ showSpinner = false } = {}) {
+    if (showSpinner) setIsPinsLoading(true);
+    setPinsError('');
+    return fetchPins(conversationId)
+      .then(setPins)
+      .catch((err) => setPinsError(getErrorMessage(err, 'Could not load pins')))
+      .finally(() => setIsPinsLoading(false));
+  }
+
+  function openPins() {
+    setIsPinsOpen(true);
+    loadPins({ showSpinner: pins.length === 0 });
+  }
+
+  function closePins() {
+    setIsPinsOpen(false);
+    setPinMenu(null);
+  }
+
+  async function handlePin(message, days) {
+    try {
+      const pin = await createPin(conversationId, message.id, days);
+      // A new pin is the newest active one, which the server sorts first.
+      setPins((prev) => [
+        { ...pin, body: message.body, sender_id: message.sender_id, message_deleted: false },
+        ...prev,
+      ]);
+      showToast(`Message pinned for ${days === 1 ? '1 day' : `${days} days`}`);
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Could not pin message'));
+    }
+  }
+
+  async function handleUnpin(pin) {
+    try {
+      await deletePin(conversationId, pin.id);
+      setPins((prev) => prev.filter((p) => p.id !== pin.id));
+      showToast('Message unpinned');
+    } catch (err) {
+      // Already removed (e.g. by the other participant): drop it from the list too.
+      if (err?.response?.status === 404) setPins((prev) => prev.filter((p) => p.id !== pin.id));
+      showToast(getErrorMessage(err, 'Could not unpin message'));
+    }
+  }
+
+  // Scroll to a pinned message. Initial history is just the latest page, so if
+  // the message is older than what is loaded, page older history in (existing
+  // `before` cursor) until it is, then jump and flash it like a reply jump.
+  async function jumpToPin(pin) {
+    if (pin.message_deleted) return;
+    closePins();
+
+    const id = pin.message_id;
+    const isRendered = () => scrollRef.current?.querySelector(`[data-message-id="${id}"]`);
+
+    try {
+      let oldestId = messages[0]?.id;
+      while (!isRendered() && oldestId != null && Number(oldestId) > Number(id)) {
+        const older = await getMessages(conversationId, { before: oldestId, limit: 100 });
+        if (older.length === 0) break;
+        oldestId = older[0].id;
+        isNearBottomRef.current = false; // keep the "follow new messages" effect from scrolling to bottom
+        // Render synchronously so the element exists for the jump below.
+        flushSync(() =>
+          setMessages((prev) => {
+            const have = new Set(prev.map((m) => Number(m.id)));
+            return [...older.filter((m) => !have.has(Number(m.id))), ...prev];
+          })
+        );
+      }
+    } catch {
+      // fall through to the not-found toast
+    }
+
+    if (isRendered()) jumpToMessage(id);
+    else showToast('Could not find that message');
+  }
+
+  function handlePinItemContextMenu(e, pin) {
+    e.preventDefault();
+    e.stopPropagation(); // keep the document-level close handler from closing it straight away
+    setPinMenu({ x: e.clientX, y: e.clientY, pin });
+  }
+
+  // Initial pins fetch, so bubbles can show their pin icon before the modal is opened.
+  useEffect(() => {
+    loadPins();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => () => clearTimeout(toastTimerRef.current), []);
+
+  // Escape closes the modal (or, if open, just the Unpin menu — see below).
+  useEffect(() => {
+    if (!isPinsOpen) return undefined;
+    function onKey(e) {
+      if (e.key === 'Escape' && !pinMenu) closePins();
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPinsOpen, pinMenu]);
+
+  // Same dismissal rules as the message context menu in MessageBubble.
+  useEffect(() => {
+    if (!pinMenu) return undefined;
+    const close = () => setPinMenu(null);
+    function onKey(e) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('click', close);
+    document.addEventListener('contextmenu', close);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      document.removeEventListener('click', close);
+      document.removeEventListener('contextmenu', close);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [pinMenu]);
+
+  const activePinnedMessageIds = new Set(
+    pins.filter((p) => p.is_active).map((p) => Number(p.message_id))
+  );
+
   function finishReply() {
     clearDraft();
     setReplyingTo(null);
@@ -537,6 +705,17 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
             >
               <SearchIcon />
             </button>
+            <button
+              type="button"
+              className="btn btn-ghost message-pins-toggle"
+              onClick={openPins}
+              aria-label="Pinned messages"
+              aria-haspopup="dialog"
+              aria-expanded={isPinsOpen}
+            >
+              <PinIcon />
+              <span>Pins</span>
+            </button>
           </div>
         )}
       </header>
@@ -579,6 +758,8 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
                 replyChain={buildReplyChain(message)}
                 onReplyClick={jumpToMessage}
                 onReply={handleReply}
+                onPin={handlePin}
+                isPinned={activePinnedMessageIds.has(Number(message.id))}
                 flash={flashId === Number(message.id)}
               />
             );
@@ -629,6 +810,92 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
         onCancelReply={handleCancelReply}
         inputRef={inputRef}
       />
+
+      {isPinsOpen &&
+        createPortal(
+          <div
+            className="pins-backdrop"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) closePins();
+            }}
+          >
+            <div className="pins-modal" role="dialog" aria-modal="true" aria-label="Pinned messages">
+              <div className="pins-modal-header">
+                <h3>Pinned messages</h3>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={closePins}
+                  aria-label="Close pinned messages"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {isPinsLoading && (
+                <div className="pins-status">
+                  <span className="spinner" />
+                </div>
+              )}
+              {!isPinsLoading && pinsError && <div className="banner banner-error">{pinsError}</div>}
+              {!isPinsLoading && !pinsError && pins.length === 0 && (
+                <p className="pins-status">No pinned messages yet.</p>
+              )}
+
+              {!isPinsLoading && pins.length > 0 && (
+                <ul className="pins-list">
+                  {pins.map((pin) => (
+                    <li
+                      key={pin.id}
+                      className={`pins-item${pin.is_active ? '' : ' pins-item-expired'}`}
+                      onContextMenu={(e) => handlePinItemContextMenu(e, pin)}
+                    >
+                      <button
+                        type="button"
+                        className={`pins-item-body${pin.message_deleted ? ' pins-item-deleted' : ''}`}
+                        onClick={() => jumpToPin(pin)}
+                        disabled={pin.message_deleted}
+                      >
+                        <span className="pins-item-text">{pin.body}</span>
+                        {!pin.is_active && <span className="pins-item-expired-label">Expired</span>}
+                      </button>
+                      <button
+                        type="button"
+                        className="pins-item-unpin"
+                        onClick={() => handleUnpin(pin)}
+                        aria-label="Unpin message"
+                        title="Unpin"
+                      >
+                        <PinIcon />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {pinMenu &&
+        createPortal(
+          <ul className="message-context-menu" style={{ top: pinMenu.y, left: pinMenu.x }} role="menu">
+            <li role="none">
+              <button type="button" role="menuitem" onClick={() => handleUnpin(pinMenu.pin)}>
+                Unpin
+              </button>
+            </li>
+          </ul>,
+          document.body
+        )}
+
+      {toast &&
+        createPortal(
+          <div className="toast" role="status" aria-live="polite">
+            {toast}
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
