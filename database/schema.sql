@@ -31,6 +31,7 @@ CREATE TABLE messages (
   conversation_id INT,
   sender_id INT,
   body TEXT NOT NULL,
+  is_delivered BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (conversation_id) REFERENCES conversations(id),
   FOREIGN KEY (sender_id) REFERENCES users(id),

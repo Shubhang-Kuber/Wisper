@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const presence = require('./presence');
 
 // Room naming convention: every conversation gets its own Socket.io room,
 // named `conversation:<id>`. All participants of a conversation join that
@@ -51,23 +52,103 @@ module.exports = function setupSockets(io, pool) {
   io.on('connection', async (socket) => {
     console.log(`Socket connected: userId=${socket.userId}, socketId=${socket.id}`);
 
+    // --- Presence bookkeeping ---
+    // Registered synchronously, BEFORE the first await below: if the socket
+    // drops while we're still doing the room-join query, these listeners must
+    // already exist or the user would be stuck "online" forever.
+    //
+    // `disconnecting` (not `disconnect`) because socket.rooms is still
+    // populated there, so we know which conversations to tell. user_offline
+    // and the last_seen_at write only happen when this was the user's LAST
+    // open socket — closing one of two tabs leaves them online.
+    const cameOnline = presence.add(socket.userId, socket.id);
+    let wentOffline = false;
+
+    socket.on('disconnecting', () => {
+      wentOffline = presence.remove(socket.userId, socket.id);
+      if (!wentOffline) return;
+
+      // An empty room list would make socket.to(...) broadcast to everyone.
+      const rooms = [...socket.rooms].filter((r) => r.startsWith('conversation:'));
+      if (rooms.length === 0) return;
+
+      socket.to(rooms).emit('user_offline', {
+        userId: socket.userId,
+        lastSeenAt: new Date().toISOString(),
+      });
+    });
+
+    socket.on('disconnect', async () => {
+      console.log(`Socket disconnected: userId=${socket.userId}, socketId=${socket.id}`);
+      if (!wentOffline) return;
+
+      try {
+        await pool.query('UPDATE users SET last_seen_at = NOW() WHERE id = ?', [socket.userId]);
+      } catch (err) {
+        console.error('Failed to update last_seen_at on disconnect:', err.message);
+      }
+    });
+
     // --- Rejoin every conversation this user already belongs to ---
     // This covers reconnects: a user who goes offline and comes back gets
     // dropped back into every room they were already part of, with no
     // manual step on their end. It does NOT cover conversations created
     // *after* this socket connected — see the `join_conversation` handler
     // below for that case.
+    let conversationIds = [];
     try {
       const [rows] = await pool.query(
         'SELECT conversation_id FROM conversation_participants WHERE user_id = ?',
         [socket.userId]
       );
 
-      rows.forEach((row) => socket.join(roomName(row.conversation_id)));
+      conversationIds = rows.map((row) => row.conversation_id);
+      conversationIds.forEach((id) => socket.join(roomName(id)));
 
       console.log(`Socket ${socket.id} (userId=${socket.userId}) joined ${rows.length} conversation room(s)`);
     } catch (err) {
       console.error('Failed to join existing conversation rooms:', err.message);
+    }
+
+    // --- Presence snapshot + online announcement + delivery catch-up ---
+    if (!socket.disconnected && conversationIds.length > 0) {
+      try {
+        // Who among my co-participants is online right now? Events alone only
+        // cover changes after this client connects, so tell it up front.
+        const [peers] = await pool.query(
+          'SELECT DISTINCT user_id FROM conversation_participants WHERE conversation_id IN (?) AND user_id <> ?',
+          [conversationIds, socket.userId]
+        );
+        socket.emit('presence_snapshot', {
+          onlineUserIds: presence.onlineAmong(peers.map((p) => p.user_id)),
+        });
+
+        if (cameOnline) {
+          socket.to(conversationIds.map(roomName)).emit('user_online', { userId: socket.userId });
+        }
+
+        // Messages sent to me while I had no open socket never got a
+        // `message_delivered` ack from my client. They count as delivered now
+        // that I'm connected; tell their senders.
+        const [pending] = await pool.query(
+          'SELECT id, conversation_id FROM messages WHERE is_delivered = FALSE AND sender_id <> ? AND conversation_id IN (?)',
+          [socket.userId, conversationIds]
+        );
+        if (pending.length > 0) {
+          await pool.query('UPDATE messages SET is_delivered = TRUE WHERE id IN (?)', [pending.map((m) => m.id)]);
+
+          const byConversation = new Map();
+          pending.forEach((m) => {
+            if (!byConversation.has(m.conversation_id)) byConversation.set(m.conversation_id, []);
+            byConversation.get(m.conversation_id).push(m.id);
+          });
+          byConversation.forEach((messageIds, conversationId) => {
+            io.to(roomName(conversationId)).emit('message_delivered', { conversationId, messageIds });
+          });
+        }
+      } catch (err) {
+        console.error('Presence/delivery catch-up failed:', err.message);
+      }
     }
 
     // --- join_conversation ---
@@ -118,7 +199,11 @@ module.exports = function setupSockets(io, pool) {
     // reply-to-reply chains). An optional acknowledgement callback lets the
     // sender know whether the write succeeded; clients that don't pass one
     // behave exactly as before.
-    socket.on('send_message', async ({ conversationId, body, replied_to_message_id } = {}, ack) => {
+    //
+    // `clientId` is an opaque id the sender's UI made up for its optimistic
+    // bubble. It is never stored; it is echoed back on `new_message` as
+    // `client_id` so the sender can swap the local bubble for the real row.
+    socket.on('send_message', async ({ conversationId, body, clientId, replied_to_message_id } = {}, ack) => {
       const reply = (payload) => {
         if (typeof ack === 'function') ack(payload);
       };
@@ -158,7 +243,7 @@ module.exports = function setupSockets(io, pool) {
         );
 
         const [rows] = await pool.query(
-          `SELECT m.id, m.conversation_id, m.sender_id, m.body, m.created_at, m.replied_to_message_id,
+          `SELECT m.id, m.conversation_id, m.sender_id, m.body, m.created_at, m.replied_to_message_id, m.is_delivered,
                   r.body AS replied_body, r.sender_id AS replied_sender_id, ru.username AS replied_sender_username
            FROM messages m
            LEFT JOIN messages r ON r.id = m.replied_to_message_id
@@ -167,6 +252,10 @@ module.exports = function setupSockets(io, pool) {
           [result.insertId]
         );
         const message = rows[0];
+        message.is_delivered = Boolean(message.is_delivered);
+        if (typeof clientId === 'string' && clientId.length > 0 && clientId.length <= 64) {
+          message.client_id = clientId;
+        }
 
         // ...and only broadcast once the write has succeeded, so nobody
         // ever sees a message over the socket that isn't actually durable.
@@ -175,6 +264,39 @@ module.exports = function setupSockets(io, pool) {
       } catch (err) {
         console.error('send_message error:', err.message);
         fail('Something went wrong, please try again');
+      }
+    });
+
+    // --- message_delivered ---
+    // Emitted by the RECIPIENT's client when a `new_message` reaches it. Flips
+    // is_delivered and tells the room so the sender's ✓ becomes ✓✓. Like
+    // `typing`, bad input is dropped silently. Acks are idempotent: the
+    // `is_delivered = FALSE` guard means a duplicate (second tab, or the
+    // on-connect catch-up racing a live ack) changes nothing and emits nothing.
+    socket.on('message_delivered', async (payload) => {
+      try {
+        const { messageId: rawMessageId, conversationId: rawConversationId } = payload || {};
+        const messageId = Number(rawMessageId);
+        const conversationId = Number(rawConversationId);
+        if (!Number.isInteger(messageId) || messageId <= 0) return;
+        if (!Number.isInteger(conversationId) || conversationId <= 0) return;
+
+        const authorized = await isParticipant(pool, conversationId, socket.userId);
+        if (!authorized) return;
+
+        // sender_id <> me: you can't acknowledge your own message.
+        const [result] = await pool.query(
+          'UPDATE messages SET is_delivered = TRUE WHERE id = ? AND conversation_id = ? AND sender_id <> ? AND is_delivered = FALSE',
+          [messageId, conversationId, socket.userId]
+        );
+        if (result.affectedRows === 0) return;
+
+        io.to(roomName(conversationId)).emit('message_delivered', {
+          conversationId,
+          messageIds: [messageId],
+        });
+      } catch (err) {
+        console.error('message_delivered error:', err.message);
       }
     });
 
@@ -257,16 +379,7 @@ module.exports = function setupSockets(io, pool) {
       });
       typingActive.clear();
     });
-
-    // --- disconnect ---
-    socket.on('disconnect', async () => {
-      console.log(`Socket disconnected: userId=${socket.userId}, socketId=${socket.id}`);
-
-      try {
-        await pool.query('UPDATE users SET last_seen_at = NOW() WHERE id = ?', [socket.userId]);
-      } catch (err) {
-        console.error('Failed to update last_seen_at on disconnect:', err.message);
-      }
-    });
+    // (The `disconnect` handler — last_seen_at — lives with the presence
+    // bookkeeping near the top of this connection handler.)
   });
 };

@@ -140,7 +140,7 @@ router.get('/:id/messages', authenticateToken, async (req, res) => {
     // are left out entirely. Messages deleted for everyone stay in the list as
     // tombstones (is_deleted, body null) so the thread shows "[deleted message]".
     const requesterJson = `CAST(? AS JSON)`;
-    const columns = `m.id, m.sender_id, m.body, m.created_at, m.replied_to_message_id, m.is_deleted,
+    const columns = `m.id, m.sender_id, m.body, m.created_at, m.replied_to_message_id, m.is_deleted, m.is_delivered,
                      CASE WHEN r.is_deleted OR JSON_CONTAINS(COALESCE(r.deleted_by_users, JSON_ARRAY()), ${requesterJson})
                           THEN NULL ELSE r.body END AS replied_body,
                      r.sender_id AS replied_sender_id, ru.username AS replied_sender_username`;
@@ -169,7 +169,12 @@ router.get('/:id/messages', authenticateToken, async (req, res) => {
 
     rows = rows.map((row) => {
       const isDeleted = Boolean(row.is_deleted);
-      return { ...row, is_deleted: isDeleted, body: isDeleted ? null : row.body };
+      return {
+        ...row,
+        is_deleted: isDeleted,
+        is_delivered: Boolean(row.is_delivered),
+        body: isDeleted ? null : row.body,
+      };
     });
     rows.reverse();
 

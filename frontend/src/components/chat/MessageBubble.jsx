@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import ReadReceipt from './ReadReceipt';
+import MessageStatus from './MessageStatus';
 
 function formatTime(iso) {
   return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -47,6 +48,8 @@ function renderHighlighted(body, terms) {
 // quoted chain and `onReplyClick(id)` jumps to a quoted message; `onReply` enables the right-click
 // menu (omitted for pending messages); `pending` swaps the time for a
 // "Pending" marker; `flash` briefly pulses the bubble after a jump.
+// `status` ('sending' | 'sent' | 'delivered' | 'read' | 'failed') adds the
+// delivery icon beside the time on the sender's own messages.
 //
 // Pin additions (optional): `onPin(message, days)` enables the Pin submenu in
 // the right-click menu; `isPinned` shows a pin icon on the bubble (active
@@ -76,6 +79,7 @@ export default function MessageBubble({
   onDelete,
   isPinned,
   pending,
+  status,
   flash,
 }) {
   const [menu, setMenu] = useState(null);
@@ -153,11 +157,14 @@ export default function MessageBubble({
               : message.body}
           </p>
         )}
-        {pending ? (
-          <span className="message-time message-pending">⏳ Pending</span>
-        ) : (
-          <span className="message-time">{formatTime(message.created_at)}</span>
-        )}
+        <span className="message-meta">
+          {pending ? (
+            <span className="message-time message-pending">Pending</span>
+          ) : (
+            <span className="message-time">{formatTime(message.created_at)}</span>
+          )}
+          {isMine && !isDeleted && status && <MessageStatus status={status} />}
+        </span>
       </div>
       {isMine && showSeen && <ReadReceipt />}
       {menu &&

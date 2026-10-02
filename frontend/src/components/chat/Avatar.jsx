@@ -26,7 +26,9 @@ function colorForUsername(username) {
   return `var(${AVATAR_COLOR_VARS[index]})`;
 }
 
-export default function Avatar({ username, size = 40, unreadCount = 0 }) {
+// `isOnline` (optional) adds a green presence dot; offline shows nothing here
+// (the chat header has its own online/offline PresenceDot).
+export default function Avatar({ username, size = 40, unreadCount = 0, isOnline = false }) {
   const initial = username ? username.trim()[0]?.toUpperCase() : '?';
   const hasUnread = unreadCount > 0;
   const unreadDisplay = unreadCount > 99 ? '99+' : unreadCount;
@@ -45,6 +47,7 @@ export default function Avatar({ username, size = 40, unreadCount = 0 }) {
       >
         {initial}
       </div>
+      {isOnline && <span className="avatar-online-dot" role="img" aria-label="Online" />}
       {hasUnread && (
         <span className="avatar-badge" aria-label={`${unreadCount} unread messages`}>
           {unreadDisplay}

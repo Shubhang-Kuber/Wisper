@@ -1,3 +1,4 @@
+import { usePresence } from '../../context/PresenceContext';
 import Avatar from './Avatar';
 
 function formatPreviewTime(iso) {
@@ -11,7 +12,8 @@ function formatPreviewTime(iso) {
 }
 
 export default function ConversationListItem({ conversation, isActive, onClick }) {
-  const { otherUsername, lastMessageBody, lastMessageAt, unreadCount } = conversation;
+  const { otherUserId, otherUsername, lastMessageBody, lastMessageAt, unreadCount } = conversation;
+  const { isOnline } = usePresence();
 
   return (
     <button
@@ -19,7 +21,12 @@ export default function ConversationListItem({ conversation, isActive, onClick }
       className={`conversation-item ${isActive ? 'is-active' : ''}`}
       onClick={onClick}
     >
-      <Avatar username={otherUsername} size={44} unreadCount={unreadCount} />
+      <Avatar
+        username={otherUsername}
+        size={44}
+        unreadCount={unreadCount}
+        isOnline={isOnline(otherUserId)}
+      />
       <div className="conversation-item-body">
         <div className="conversation-item-top">
           <span className="conversation-item-name">{otherUsername}</span>

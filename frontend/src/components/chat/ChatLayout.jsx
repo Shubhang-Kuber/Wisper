@@ -105,6 +105,13 @@ export default function ChatLayout() {
       const isOpenAndVisible =
         conversationId === selectedConversationIdRef.current && isVisibleRef.current;
 
+      // Tell the sender it reached us. Done here (not in MessageThread) because
+      // this listener is always mounted, so delivery is acknowledged even when
+      // that conversation isn't the open one. The server ignores duplicates.
+      if (!isMine) {
+        socket.emit('message_delivered', { messageId: message.id, conversationId });
+      }
+
       setConversations((prev) => {
         const index = prev.findIndex((c) => c.conversationId === conversationId);
         // Not in our list snapshot (e.g. a conversation someone just

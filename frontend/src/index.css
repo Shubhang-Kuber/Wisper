@@ -1145,6 +1145,71 @@ a {
   color: var(--text-on-color);
 }
 
+/* Time + delivery icon on one line, bottom-right of the bubble. */
+.message-meta {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Delivery state: clock -> check -> double check -> double check (read).
+   The read tint is a lightened sage: plain --success is too dim on the teal bubble. */
+.message-status {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  color: var(--text-on-color);
+}
+
+.message-status.is-sending {
+  opacity: 0.7;
+}
+
+.message-status.is-read {
+  color: color-mix(in srgb, var(--success) 55%, white);
+}
+
+.message-status.is-failed {
+  font-weight: 600;
+  color: color-mix(in srgb, var(--terracotta) 60%, white);
+}
+
+/* Online/offline dot beside the name in the chat header. */
+.message-thread-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.presence-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background-color 0.2s var(--ease);
+}
+
+.presence-dot.is-online {
+  background: var(--success);
+}
+
+.presence-dot.is-offline {
+  background: var(--text-faint);
+}
+
+/* Online dot on sidebar avatars (bottom-right; the unread badge is top-right). */
+.avatar-online-dot {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--success);
+  border: 2px solid var(--bg-card);
+}
+
 .read-receipt {
   display: inline-flex;
   align-items: center;

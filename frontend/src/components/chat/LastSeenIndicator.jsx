@@ -1,10 +1,7 @@
-// `last_seen_at` (backend/src/sockets/index.js) is only ever written on
-// socket *disconnect* — there's no "online now" signal anywhere in the
-// backend (that would mean touching sockets/index.js, out of scope for
-// this phase). So this deliberately renders only what the data actually
-// says: when the other participant was last seen. It will look stale
-// while they're live in a second window mid-conversation — that's the
-// real signal, not a bug in this component.
+// `last_seen_at` (backend/src/sockets/index.js) is written when a user's LAST
+// socket closes. Whether they're online *right now* comes from the presence
+// events (PresenceContext), passed in as `isOnline`; while online we say so
+// instead of showing a stale timestamp.
 function formatLastSeen(lastSeenAt) {
   if (!lastSeenAt) return 'Last seen unavailable';
 
@@ -24,6 +21,6 @@ function formatLastSeen(lastSeenAt) {
   return `Last seen ${new Date(lastSeenAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
 }
 
-export default function LastSeenIndicator({ lastSeenAt }) {
-  return <span className="last-seen">{formatLastSeen(lastSeenAt)}</span>;
+export default function LastSeenIndicator({ lastSeenAt, isOnline }) {
+  return <span className="last-seen">{isOnline ? 'Online' : formatLastSeen(lastSeenAt)}</span>;
 }

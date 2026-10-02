@@ -5,8 +5,9 @@
 // once (one per browser tab / user, in effect) and watch messages flow.
 //
 // Usage:
-//   node test-client/client.js <JWT> <conversationId>
+//   node test-client/client.js <JWT> <conversationId> [--ack]
 // or, if you omit the arguments, the script will prompt for them.
+// --ack makes this client emit `message_delivered` for incoming messages.
 
 const { io } = require('socket.io-client');
 const readline = require('readline');
@@ -22,7 +23,18 @@ function ask(question) {
 async function main() {
   // Accept the token and conversation id as CLI args, or prompt for
   // whichever ones are missing.
-  let [, , token, conversationId] = process.argv;
+  const ackDelivery = process.argv.includes('--ack');
+  let [, , token, conversationId] = process.argv.filter((arg) => arg !== '--ack');
+
+  // The JWT payload is base64url JSON ({ userId, ... }); decode it so --ack
+  // can tell which messages are our own without another round trip.
+  const decodeUserId = (jwt) => {
+    try {
+      return Number(JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString()).userId);
+    } catch {
+      return NaN;
+    }
+  };
 
   if (!token) {
     token = await ask('JWT: ');
@@ -30,6 +42,8 @@ async function main() {
   if (!conversationId) {
     conversationId = await ask('Conversation ID: ');
   }
+
+  const myUserId = decodeUserId(token);
 
   // Connect to the backend, same host/port the REST API listens on since
   // Socket.io shares the HTTP server with Express (see backend/src/index.js).
@@ -58,6 +72,25 @@ async function main() {
   // the sender".
   socket.on('new_message', (message) => {
     console.log(`\n[message #${message.id}] user ${message.sender_id}: ${message.body}`);
+    // --ack: behave like a real recipient client and acknowledge delivery of
+    // other people's messages (see the `message_delivered` server handler).
+    if (ackDelivery && Number(message.sender_id) !== myUserId) {
+      socket.emit('message_delivered', { messageId: message.id, conversationId: message.conversation_id });
+    }
+  });
+
+  // Delivery + presence events (backend/src/sockets/index.js).
+  socket.on('message_delivered', (payload) => {
+    console.log(`\n[delivered] conversation ${payload.conversationId}: messages ${payload.messageIds.join(', ')}`);
+  });
+  socket.on('presence_snapshot', (payload) => {
+    console.log(`\n[presence] online right now: ${payload.onlineUserIds.join(', ') || 'nobody'}`);
+  });
+  socket.on('user_online', (payload) => {
+    console.log(`\n[presence] user ${payload.userId} is ONLINE`);
+  });
+  socket.on('user_offline', (payload) => {
+    console.log(`\n[presence] user ${payload.userId} is OFFLINE (last seen ${payload.lastSeenAt})`);
   });
 
   // Server-side rejections (not a participant, DB write failed, etc.) land

@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal, flushSync } from 'react-dom';
 import client from '../../api/client';
 import { getMessages, searchMessages } from '../../api/conversations';
+import { usePresence } from '../../context/PresenceContext';
 import { getErrorMessage } from '../../utils/errors';
 import Avatar from './Avatar';
 import LastSeenIndicator from './LastSeenIndicator';
 import MessageBubble from './MessageBubble';
 import MessageInput from './MessageInput';
 import MessageSearch from './MessageSearch';
+import PresenceDot from './PresenceDot';
 import TypingIndicator from './TypingIndicator';
 
 // The query goes to MySQL BOOLEAN MODE, where + - < > ( ) ~ * " @ are
@@ -53,6 +55,11 @@ const deleteMessage = (conversationId, messageId, deleteType) =>
 
 const TOAST_MS = 2600;
 
+// Opaque id for an optimistic bubble; the server echoes it back as `client_id`.
+// randomUUID needs a secure context (https / localhost), hence the fallback.
+const newClientId = () =>
+  globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
 // Typing indicator timings (see TYPING_INDICATOR.md). The sender's heartbeat
 // must stay shorter than the receiver's display timeout, or the indicator
 // would flicker off during a long message.
@@ -85,10 +92,14 @@ function SearchIcon() {
 export default function MessageThread({ conversation, currentUserId, socket, isSocketConnected }) {
   const {
     conversationId,
+    otherUserId,
     otherUsername,
     otherLastSeenAt,
     otherLastReadAt: initialOtherLastReadAt,
   } = conversation;
+
+  const { isOnline, lastSeenOverride } = usePresence();
+  const otherIsOnline = isOnline(otherUserId);
 
   const [messages, setMessages] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -176,16 +187,26 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Live updates: new messages append here (never optimistically on
-  // send — see MessageInput), and conversation_read moves the "seen"
-  // cutoff for the other participant.
+  // Live updates: new messages append here, conversation_read moves the
+  // "seen" cutoff for the other participant, and message_delivered flips
+  // is_delivered (✓ → ✓✓). Plain sends are optimistic: handleSend adds a local
+  // bubble tagged with a clientId, and the server's echo (client_id) replaces it.
   useEffect(() => {
     if (!socket) return undefined;
 
     function handleNewMessage(message) {
       if (Number(message.conversation_id) !== Number(conversationId)) return;
 
-      setMessages((prev) => [...prev, message]);
+      setMessages((prev) => {
+        if (prev.some((m) => Number(m.id) === Number(message.id))) return prev;
+        const localIndex = message.client_id
+          ? prev.findIndex((m) => m.clientId === message.client_id)
+          : -1;
+        if (localIndex === -1) return [...prev, message];
+        const next = [...prev];
+        next[localIndex] = message;
+        return next;
+      });
       // Their message has arrived, so they are no longer "typing".
       if (Number(message.sender_id) !== Number(currentUserId)) hideOtherTyping();
     }
@@ -219,15 +240,25 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
       markMessageDeleted(payload.message_id);
     }
 
+    function handleMessageDelivered(payload) {
+      if (Number(payload?.conversationId) !== Number(conversationId)) return;
+      const ids = new Set((payload.messageIds || []).map(Number));
+      setMessages((prev) =>
+        prev.map((m) => (ids.has(Number(m.id)) && !m.is_delivered ? { ...m, is_delivered: true } : m))
+      );
+    }
+
     socket.on('new_message', handleNewMessage);
     socket.on('conversation_read', handleConversationRead);
     socket.on('message_deleted', handleMessageDeleted);
+    socket.on('message_delivered', handleMessageDelivered);
     socket.on('user_typing', handleUserTyping);
 
     return () => {
       socket.off('new_message', handleNewMessage);
       socket.off('conversation_read', handleConversationRead);
       socket.off('message_deleted', handleMessageDeleted);
+      socket.off('message_delivered', handleMessageDelivered);
       socket.off('user_typing', handleUserTyping);
     };
   }, [socket, conversationId, currentUserId]);
@@ -793,10 +824,36 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
   function handleSend(body) {
     stopTyping();
 
-    // Plain messages: unchanged behavior (fire and forget, echo renders it).
+    // Plain messages: shown immediately as a local bubble (clock icon) and
+    // swapped for the real row when the server's echo arrives with our clientId.
     if (!replyingTo) {
-      socket?.emit('send_message', { conversationId, body });
+      const clientId = newClientId();
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `local-${clientId}`,
+          clientId,
+          localStatus: 'sending',
+          sender_id: currentUserId,
+          body,
+          created_at: new Date().toISOString(),
+          is_deleted: false,
+          is_delivered: false,
+        },
+      ]);
       setInputText('');
+      socket?.timeout(10000).emit('send_message', { conversationId, body, clientId }, (err, res) => {
+        // Success needs no work here: the echo replaces the local bubble. If the
+        // echo is slow, the ack at least upgrades the clock to a single check.
+        const ok = !err && res && res.ok;
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.clientId === clientId && m.localStatus
+              ? { ...m, localStatus: ok ? 'sent' : 'failed' }
+              : m
+          )
+        );
+      });
       return;
     }
 
@@ -832,6 +889,20 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
     .lastIndexOf(Number(currentUserId));
   const seenCutoff = otherLastReadAt ? new Date(otherLastReadAt).getTime() : null;
 
+  // Delivery icon state for one of my messages. Local (not yet echoed) bubbles
+  // report their own state; otherwise read > delivered > sent, where "read"
+  // reuses the same last-read cutoff as the "Seen" label (per message here).
+  function statusOf(message) {
+    if (message.localStatus) return message.localStatus;
+    if (seenCutoff !== null && seenCutoff >= new Date(message.created_at).getTime()) return 'read';
+    return message.is_delivered ? 'delivered' : 'sent';
+  }
+
+  // A local bubble that never got confirmed ("Not sent") can only be discarded.
+  function discardLocal(message) {
+    setMessages((prev) => prev.filter((m) => m.id !== message.id));
+  }
+
   return (
     <div className="message-thread">
       <header className="message-thread-header">
@@ -852,8 +923,14 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
           <div className="message-thread-header-content">
             <Avatar username={otherUsername} size={40} />
             <div>
-              <h2>{otherUsername}</h2>
-              <LastSeenIndicator lastSeenAt={otherLastSeenAt} />
+              <div className="message-thread-name">
+                <h2>{otherUsername}</h2>
+                <PresenceDot isOnline={otherIsOnline} />
+              </div>
+              <LastSeenIndicator
+                lastSeenAt={lastSeenOverride(otherUserId) ?? otherLastSeenAt}
+                isOnline={otherIsOnline}
+              />
             </div>
             <button
               type="button"
@@ -904,6 +981,7 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
               index === lastMineIndex &&
               seenCutoff !== null &&
               seenCutoff >= new Date(message.created_at).getTime();
+            const isLocal = Boolean(message.localStatus);
 
             return (
               <MessageBubble
@@ -911,14 +989,16 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
                 message={message}
                 isMine={isMine}
                 showSeen={showSeen}
+                status={isMine ? statusOf(message) : undefined}
                 highlightTerms={
                   currentMatch && Number(currentMatch.id) === Number(message.id) ? activeTerms : null
                 }
                 replyChain={buildReplyChain(message)}
                 onReplyClick={jumpToMessage}
-                onReply={handleReply}
-                onPin={handlePin}
-                onDelete={handleDelete}
+                // Local bubbles have no server id yet: no reply/pin, delete = discard.
+                onReply={isLocal ? undefined : handleReply}
+                onPin={isLocal ? undefined : handlePin}
+                onDelete={isLocal ? discardLocal : handleDelete}
                 isPinned={activePinnedMessageIds.has(Number(message.id))}
                 flash={flashId === Number(message.id)}
               />
@@ -941,6 +1021,7 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
                 message={pendingMessage}
                 isMine
                 showSeen={false}
+                status="sending"
                 replyChain={buildReplyChain(pendingMessage)}
                 onReplyClick={jumpToMessage}
                 pending

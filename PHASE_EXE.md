@@ -30,16 +30,18 @@
 - Database: no schema change needed
 
 ### 1.2 Delivered Status
-- Database: add `is_delivered` BOOLEAN to messages (default TRUE on send)
-- Backend: socket listener for `message_delivered` (emitted by recipient on receive)
-- Frontend: show delivery icon progression (clock → check → double-check)
+*Implemented — pending manual end-to-end verification. Details: `DELIVERY_AND_PRESENCE_PLAN.md`.*
+- Database: add `is_delivered` BOOLEAN to messages (default FALSE; set TRUE when the recipient acks) — run `database/migrations/001_add_is_delivered.sql`
+- Backend: socket listener for `message_delivered` (emitted by recipient on receive); messages sent while the recipient was offline are marked delivered when they next connect
+- Frontend: show delivery icon progression (clock → check → double-check, green when read)
 - UI: icon next to timestamp on sent message
 
 ### 1.3 Online/Offline Presence
+*Implemented — pending manual end-to-end verification.*
 - Backend: track socket count per user (real-time, not last_seen_at)
 - Database: no change (socket count lives in memory)
-- Frontend: green/gray dot next to user name in header
-- Socket event: `user_online` / `user_offline` on connect/disconnect
+- Frontend: green/gray dot next to user name in header (and a green dot on online users' sidebar avatars)
+- Socket event: `user_online` / `user_offline` on connect/disconnect, plus `presence_snapshot` on connect
 
 ### 1.4 Message Reactions
 - Database: add `message_reactions` table (id, message_id, user_id, emoji, created_at)
