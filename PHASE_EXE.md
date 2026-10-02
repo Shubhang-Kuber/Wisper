@@ -25,7 +25,7 @@
 
 ### 1.1 Typing Indicator
 - Backend: emit `user_typing` socket event, broadcast to conversation room
-- Frontend: show "User is typing..." below message thread
+- Frontend: show "typing..." below message thread
 - Auto-clear after 3 seconds of inactivity
 - Database: no schema change needed
 
