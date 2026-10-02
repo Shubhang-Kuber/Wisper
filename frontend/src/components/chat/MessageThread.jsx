@@ -8,6 +8,7 @@ import LastSeenIndicator from './LastSeenIndicator';
 import MessageBubble from './MessageBubble';
 import MessageInput from './MessageInput';
 import MessageSearch from './MessageSearch';
+import TypingIndicator from './TypingIndicator';
 
 // The query goes to MySQL BOOLEAN MODE, where + - < > ( ) ~ * " @ are
 // operators (and an unbalanced one is a syntax error). Users type plain
@@ -51,6 +52,13 @@ const deleteMessage = (conversationId, messageId, deleteType) =>
   client.post(`/conversations/${conversationId}/delete/${messageId}`, { delete_type: deleteType });
 
 const TOAST_MS = 2600;
+
+// Typing indicator timings (see TYPING_INDICATOR.md). The sender's heartbeat
+// must stay shorter than the receiver's display timeout, or the indicator
+// would flicker off during a long message.
+const TYPING_IDLE_MS = 3000; // sender: no keystroke for this long -> isTyping:false
+const TYPING_HEARTBEAT_MS = 2000; // sender: min gap between isTyping:true re-emits
+const TYPING_DISPLAY_TIMEOUT_MS = 3000; // receiver: auto-clear after the last isTyping:true
 
 function PinIcon() {
   return (
@@ -115,8 +123,16 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
   const [isUnpinningAll, setIsUnpinningAll] = useState(false);
   const [pinMenu, setPinMenu] = useState(null); //{ x, y, pin } — right-click "Unpin" menu inside the modal
   const [toast, setToast] = useState('');
+  const [isOtherTyping, setIsOtherTyping] = useState(false);
 
   const toastTimerRef = useRef(null);
+  // Typing: receiver auto-clear timer, and the sender's idle timer / state.
+  const otherTypingTimerRef = useRef(null);
+  const typingIdleTimerRef = useRef(null);
+  const typingSentRef = useRef(false);
+  const lastTypingTrueAtRef = useRef(0);
+  const socketRef = useRef(socket);
+  socketRef.current = socket;
   const inputRef = useRef(null);
   const restoredDraftRef = useRef(false);
   const latestReplyStateRef = useRef({ replyingTo: null, inputText: '' });
@@ -170,6 +186,24 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
       if (Number(message.conversation_id) !== Number(conversationId)) return;
 
       setMessages((prev) => [...prev, message]);
+      // Their message has arrived, so they are no longer "typing".
+      if (Number(message.sender_id) !== Number(currentUserId)) hideOtherTyping();
+    }
+
+    function handleUserTyping(payload) {
+      if (Number(payload?.conversationId) !== Number(conversationId)) return;
+      if (Number(payload.userId) === Number(currentUserId)) return; // our own other tab/device
+      if (payload.isTyping === true) {
+        setIsOtherTyping(true);
+        // Local clock only: server timestamps are never compared.
+        clearTimeout(otherTypingTimerRef.current);
+        otherTypingTimerRef.current = setTimeout(
+          () => setIsOtherTyping(false),
+          TYPING_DISPLAY_TIMEOUT_MS
+        );
+      } else {
+        hideOtherTyping();
+      }
     }
 
     function handleConversationRead(payload) {
@@ -188,13 +222,78 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
     socket.on('new_message', handleNewMessage);
     socket.on('conversation_read', handleConversationRead);
     socket.on('message_deleted', handleMessageDeleted);
+    socket.on('user_typing', handleUserTyping);
 
     return () => {
       socket.off('new_message', handleNewMessage);
       socket.off('conversation_read', handleConversationRead);
       socket.off('message_deleted', handleMessageDeleted);
+      socket.off('user_typing', handleUserTyping);
     };
   }, [socket, conversationId, currentUserId]);
+
+  function hideOtherTyping() {
+    clearTimeout(otherTypingTimerRef.current);
+    setIsOtherTyping(false);
+  }
+
+  // Our own socket dropped: whatever "typing" we were showing is stale. It
+  // reappears only after a fresh user_typing following the reconnect. The
+  // sender-side state resets too, so the first keystroke after reconnect emits.
+  useEffect(() => {
+    if (isSocketConnected) return;
+    hideOtherTyping();
+    clearTimeout(typingIdleTimerRef.current);
+    typingSentRef.current = false;
+    lastTypingTrueAtRef.current = 0;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSocketConnected]);
+
+  useEffect(() => () => clearTimeout(otherTypingTimerRef.current), []);
+
+  // Sender side. Typing events are never queued: if the socket is down they
+  // are simply not sent.
+  function stopTyping() {
+    clearTimeout(typingIdleTimerRef.current);
+    if (!typingSentRef.current) return;
+    typingSentRef.current = false;
+    lastTypingTrueAtRef.current = 0;
+    const sock = socketRef.current;
+    if (sock?.connected) sock.emit('typing', { conversationId, isTyping: false });
+  }
+
+  // Called by MessageInput only for text the user typed or pasted (never for
+  // draft restore or programmatic clears).
+  function handleUserInput(text) {
+    if (!text.trim()) {
+      stopTyping();
+      return;
+    }
+    const sock = socketRef.current;
+    if (!sock?.connected) return;
+
+    const now = Date.now();
+    if (now - lastTypingTrueAtRef.current >= TYPING_HEARTBEAT_MS) {
+      sock.emit('typing', { conversationId, isTyping: true });
+      lastTypingTrueAtRef.current = now;
+      typingSentRef.current = true;
+    }
+
+    clearTimeout(typingIdleTimerRef.current);
+    typingIdleTimerRef.current = setTimeout(stopTyping, TYPING_IDLE_MS);
+  }
+
+  // Leaving the conversation (unmount) or closing the tab ends typing. The
+  // tab-close emit is best effort; the server's `disconnecting` cleanup is
+  // the guarantee.
+  useEffect(() => {
+    window.addEventListener('pagehide', stopTyping);
+    return () => {
+      window.removeEventListener('pagehide', stopTyping);
+      stopTyping();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Shows a message as deleted for everyone. Replies to it drop their cached
   // quote too, so the preview reads as a deleted message instead of the old text.
@@ -495,6 +594,7 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
   // can't be sent as a plain message by accident.
   function handleCancelReply() {
     if (replyingTo) persistDraft(replyingTo.id, inputText);
+    stopTyping(); // the box is being emptied
     setReplyingTo(null);
     setInputText('');
     setSendError('');
@@ -691,6 +791,8 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
   }
 
   function handleSend(body) {
+    stopTyping();
+
     // Plain messages: unchanged behavior (fire and forget, echo renders it).
     if (!replyingTo) {
       socket?.emit('send_message', { conversationId, body });
@@ -849,6 +951,8 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
         <div ref={bottomRef} />
       </div>
 
+      <TypingIndicator username={otherUsername} isTyping={isOtherTyping} />
+
       {hasDraft && (
         <button type="button" className="draft-pill" onClick={handleDraftPillClick}>
           📝 Draft reply saved
@@ -867,6 +971,7 @@ export default function MessageThread({ conversation, currentUserId, socket, isS
         replyChain={replyBoxChain}
         onCancelReply={handleCancelReply}
         inputRef={inputRef}
+        onUserInput={handleUserInput}
       />
 
       {isPinsOpen &&

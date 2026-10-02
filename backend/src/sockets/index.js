@@ -18,6 +18,12 @@ async function isParticipant(pool, conversationId, userId) {
   return rows.length > 0;
 }
 
+// Max one relayed `typing: true` per socket per conversation in this window.
+// `false` is never throttled.
+const TYPING_THROTTLE_MS = 1000;
+// How long a failed participant check is remembered before it is retried.
+const TYPING_DENIED_TTL_MS = 5000;
+
 module.exports = function setupSockets(io, pool) {
   // --- Handshake authentication ---
   // The client connects with `io(url, { auth: { token } })`. We verify that
@@ -170,6 +176,86 @@ module.exports = function setupSockets(io, pool) {
         console.error('send_message error:', err.message);
         fail('Something went wrong, please try again');
       }
+    });
+
+    // --- typing ---
+    // Ephemeral "X is typing" signal: relayed to the rest of the room, never
+    // written to MySQL, never logged. Because this fires on keystrokes, every
+    // rejection is silent — an `error` emit per bad event would flood the
+    // client. userId always comes from socket.userId, never the payload.
+    //
+    // Per-socket state (gone with the connection):
+    //   typingAllowed    — conversations already authorized, so a keystroke
+    //                      costs a Set lookup rather than a DB query
+    //   typingDeniedAt   — recent failed checks, so a non-participant spamming
+    //                      events can't turn into a DB query per event
+    //   typingActive     — conversations we last relayed `true` for; flushed
+    //                      as `false` on disconnect
+    //   typingLastTrueAt — throttle clock for relayed `true` events
+    const typingAllowed = new Set();
+    const typingDeniedAt = new Map();
+    const typingActive = new Set();
+    const typingLastTrueAt = new Map();
+
+    socket.on('typing', async (payload) => {
+      try {
+        const { conversationId: rawId, isTyping } = payload || {};
+        if (typeof isTyping !== 'boolean') return;
+
+        const conversationId = Number(rawId);
+        if (!Number.isInteger(conversationId) || conversationId <= 0) return;
+
+        if (isTyping) {
+          const last = typingLastTrueAt.get(conversationId);
+          if (last !== undefined && Date.now() - last < TYPING_THROTTLE_MS) return;
+        }
+
+        if (!typingAllowed.has(conversationId)) {
+          const deniedAt = typingDeniedAt.get(conversationId);
+          if (deniedAt !== undefined && Date.now() - deniedAt < TYPING_DENIED_TTL_MS) return;
+
+          const authorized = await isParticipant(pool, conversationId, socket.userId);
+          if (!authorized) {
+            typingDeniedAt.set(conversationId, Date.now());
+            return;
+          }
+          typingDeniedAt.delete(conversationId);
+          typingAllowed.add(conversationId);
+        }
+
+        // The socket may have dropped while we were awaiting the lookup.
+        if (socket.disconnected) return;
+
+        if (isTyping) {
+          typingLastTrueAt.set(conversationId, Date.now());
+          typingActive.add(conversationId);
+        } else {
+          typingActive.delete(conversationId);
+        }
+
+        // socket.to (not io.to): the sender's own socket doesn't get it back.
+        socket.to(roomName(conversationId)).emit('user_typing', {
+          conversationId,
+          userId: socket.userId,
+          isTyping,
+        });
+      } catch (err) {
+        // Stay quiet toward the client; a failed lookup just means no relay.
+        console.error('typing error:', err.message);
+      }
+    });
+
+    // `disconnecting` (not `disconnect`) so the socket is still in its rooms
+    // when we tell them it stopped typing.
+    socket.on('disconnecting', () => {
+      typingActive.forEach((conversationId) => {
+        socket.to(roomName(conversationId)).emit('user_typing', {
+          conversationId,
+          userId: socket.userId,
+          isTyping: false,
+        });
+      });
+      typingActive.clear();
     });
 
     // --- disconnect ---

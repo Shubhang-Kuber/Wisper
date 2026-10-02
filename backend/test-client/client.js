@@ -71,8 +71,18 @@ async function main() {
   });
 
   // Whatever the user types and hits Enter for becomes the message body.
+  // Typing indicator hooks: `/typing` and `/stop` emit isTyping true/false
+  // for this conversation instead of sending a message.
+  socket.on('user_typing', (payload) => {
+    console.log(`\n[typing] user ${payload.userId} in conversation ${payload.conversationId}: ${payload.isTyping}`);
+  });
+
   rl.on('line', (line) => {
     if (!line.trim()) return;
+    if (line.trim() === '/typing' || line.trim() === '/stop') {
+      socket.emit('typing', { conversationId, isTyping: line.trim() === '/typing' });
+      return;
+    }
     socket.emit('send_message', { conversationId, body: line });
   });
 

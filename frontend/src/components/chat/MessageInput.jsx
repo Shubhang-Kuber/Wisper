@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { truncate } from './MessageBubble';
 
 function SendIcon() {
@@ -18,6 +19,9 @@ function SendIcon() {
 // drafts have to be saved and restored from outside this component, and
 // the thread clears it once a send actually succeeds. When `replyingTo`
 // is set, a "Replying to …" box with a close (X) button sits above the row.
+// `onUserInput(text)` fires only for text the user actually typed or pasted —
+// not for programmatic changes (draft restore, clear after send) — which is
+// what the typing indicator keys off.
 export default function MessageInput({
   value,
   onChange,
@@ -28,7 +32,12 @@ export default function MessageInput({
   replyChain,
   onCancelReply,
   inputRef,
+  onUserInput,
 }) {
+  // Tracks IME composition (Hindi, Japanese, ...). onChange also fires for the
+  // intermediate text, so `onUserInput` is held back until it is committed.
+  const isComposingRef = useRef(false);
+
   function handleSend() {
     const trimmed = value.trim();
     if (!trimmed || disabled || isSending) return;
@@ -72,7 +81,17 @@ export default function MessageInput({
           rows={1}
           placeholder={disabled ? 'Connecting…' : 'Write a message…'}
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => {
+            onChange(e.target.value);
+            if (!isComposingRef.current) onUserInput?.(e.target.value);
+          }}
+          onCompositionStart={() => {
+            isComposingRef.current = true;
+          }}
+          onCompositionEnd={(e) => {
+            isComposingRef.current = false;
+            onUserInput?.(e.target.value);
+          }}
           onKeyDown={handleKeyDown}
           disabled={disabled}
         />

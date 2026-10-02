@@ -1383,6 +1383,64 @@ a {
   margin: 6px 18px 0;
 }
 
+/* ---- Typing indicator ---- */
+
+/* Fixed height whether or not anyone is typing, so toggling it never moves
+   the message list or the input. */
+.typing-indicator {
+  flex-shrink: 0;
+  height: 22px;
+  padding: 0 18px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-elevated);
+}
+
+.typing-dots {
+  display: inline-flex;
+  gap: 3px;
+  padding-top: 2px;
+}
+
+.typing-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: typing-dot 1.2s ease-in-out infinite;
+}
+
+.typing-dots span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-dots span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes typing-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .typing-dots span {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
 /* ---------------------------------------------------------------------- */
 /* Message pins                                                           */
 /* ---------------------------------------------------------------------- */
