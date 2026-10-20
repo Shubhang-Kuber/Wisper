@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require('cors');
 
 const pool = require('./db');
+const redis = require('./redis');
 const authRoutes = require('./routes/auth');
 const conversationsRoutes = require('./routes/conversations');
 const usersRoutes = require('./routes/users');
@@ -44,5 +45,12 @@ httpServer.listen(PORT, async () => {
     console.log('Database connection succeeded');
   } catch (err) {
     console.error('Database connection failed:', err.message);
+  }
+
+  try {
+    await redis.ping();
+    console.log('Redis connection succeeded');
+  } catch (err) {
+    console.error('Redis connection failed:', err.message);
   }
 });
