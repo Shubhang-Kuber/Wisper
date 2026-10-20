@@ -8,13 +8,11 @@ The 1:1 chat path works (REST, Socket.io rooms, typing, delivered, presence), bu
 - `io.to(room).emit(...)` only reaches sockets on the **same** process.
 - Nothing is rate limited. `/api/auth/login` can be brute-forced, `send_message` can be spammed, and the message `body` has no length check.
 
-Goal: make Wisper run as **3 backend instances behind Nginx**, with **Redis** as the shared state and message bus, plus **layered rate limiting** (Nginx at the edge, Express per route, socket events per user). A message sent from a client on instance A must reach a client on instance C. Presence must stay correct across instances. Killing one instance must not lose any chat.
+**Goal:** make Wisper run as **3 backend instances behind Nginx**, with **Redis** as the shared state and message bus, plus **layered rate limiting** (Nginx at the edge, Express per route, socket events per user). A message sent from a client on instance A must reach a client on instance C. Presence must stay correct across instances. Killing one instance must not lose any chat.
 
 Decisions already made: full scope (rate limiting, load balancing, Redis), Docker Compose for infra, plus a `Scaling_Concepts.md` learning doc.
 
----
-
-## Target architecture
+## Target architecture (end of Phase 9C)
 
 ```
 Browser (Vite :5173)
@@ -29,23 +27,117 @@ Nginx :8080  ── limit_req (per IP), least_conn, WS upgrade, passive health c
              └── MySQL (stays on the host, reached via host.docker.internal)
 ```
 
-JWT auth is already stateless (handshake in `sockets/index.js:36`, REST in `middleware/auth.js`), so any instance can serve any user without shared sessions.
+JWT auth is already stateless (handshake in `sockets/index.js`, REST in `middleware/auth.js`), so any instance can serve any user without shared sessions.
 
 ---
 
-## Step 1: Redis foundation
+## How the work is split
 
-- New dependencies in `backend/package.json`: `ioredis`, `@socket.io/redis-adapter`, `express-rate-limit`, `rate-limit-redis`.
-- New `backend/src/redis.js`: exports one shared `ioredis` client built from `REDIS_URL`, plus `createPubSub()`, which returns `[pub, sub]` duplicates for the adapter. It follows the style of `backend/src/db/index.js`.
-- New `backend/src/instance.js`: `INSTANCE_ID = process.env.INSTANCE_ID || os.hostname() + ':' + PORT`. It is used in logs, the `X-Instance-Id` response header and presence keys.
-- `backend/src/index.js`:
-  - `io.adapter(createAdapter(pub, sub))`, so every `io.to(room).emit` now fans out through Redis pub/sub to all instances. No changes are needed at the emit call sites in `sockets/index.js` or `routes/conversations.js` (which uses `req.app.get('io')`).
-  - Startup check pings Redis next to the existing `SELECT 1`.
-- Local dev without the full stack: run `docker compose up redis` and keep using `npm run dev`. Redis is always required, so the code has only one path.
+| Phase | Name | What you get | Runs as |
+|---|---|---|---|
+| **9A** | Redis + Rate Limiting | App is protected from spam and brute force | 1 instance + Redis |
+| **9B** | Shared State (multi-instance ready) | Chat, typing and presence work across 2+ instances | 2 instances on different ports + Redis |
+| **9C** | Load Balancer + Docker | 3 instances behind Nginx, failover, health checks | Full Docker Compose stack |
 
-## Step 2: Move presence to Redis
+**Why this order:**
+- Each phase works on its own and can be committed and tested before the next one starts.
+- 9A needs nothing new except Redis, and it gives you value right away even if you stop there.
+- 9B must come before 9C. A load balancer in front of instances that don't share state would break chat, because messages and presence would only be seen by users on the same instance.
+- 9C only adds infrastructure around code that already works in 9B.
 
-Rewrite `backend/src/sockets/presence.js` with the **same exported API**, now async: `add`, `remove`, `isOnline`, `onlineAmong`. Callers keep the same meaning.
+**Method for every phase:**
+1. Create a branch: `git checkout -b phase-9a-rate-limiting` (then `phase-9b-shared-state`, `phase-9c-load-balancer`).
+2. Do the steps in the listed order. Each step is small enough to test before moving on.
+3. Run that phase's "Done when" checks.
+4. Write that phase's section of `Scaling_Concepts.md` while it is fresh.
+5. Commit, merge to `main`, then start the next phase.
+
+---
+
+## Phase 9A: Redis + Rate Limiting
+
+**Goal:** protect the single instance you have today. Rate-limit counters go in Redis from the start, so they keep working unchanged when there are 3 instances later.
+
+### Prerequisites
+- Install Docker Desktop. For now it is only used to run Redis: `docker run -d --name wisper-redis -p 6379:6379 redis:7-alpine` (in 9C this is replaced by Docker Compose).
+- Add `REDIS_URL=redis://localhost:6379` to `backend/.env`.
+
+### Steps (in order)
+
+**Step A1: Redis client**
+- `npm install ioredis express-rate-limit rate-limit-redis` in `backend/`.
+- New `backend/src/redis.js`: exports one shared `ioredis` client built from `REDIS_URL`. It follows the style of `backend/src/db/index.js`.
+- `backend/src/index.js`: at startup, ping Redis next to the existing `SELECT 1` and log success or failure.
+- *Test:* start the server and see "Redis connection succeeded".
+
+**Step A2: Basic input limits**
+- `express.json({ limit: '100kb' })` in `index.js`.
+- Socket.io option `maxHttpBufferSize: 1e5`.
+- In `send_message`, `body` must be a non-empty string of at most 4000 chars, otherwise `fail(...)`.
+- *Test:* sending an empty or 5000-char message fails with an error.
+
+**Step A3: REST rate limiting (Express layer)**
+- New `backend/src/middleware/rateLimit.js` builds `express-rate-limit` limiters with a shared `RedisStore` (`rate-limit-redis` using `sendCommand` on the ioredis client):
+
+| Limiter | Applied to | Key | Limit |
+|---|---|---|---|
+| `loginLimiter` | `POST /api/auth/login` | IP + lower-cased email | 5 / 15 min, `skipSuccessfulRequests: true` |
+| `signupLimiter` | `POST /api/auth/signup` | IP | 5 / hour |
+| `apiLimiter` | `/api/conversations`, `/api/users` | `req.userId` (after `authenticateToken`), else IP | 120 / min |
+| `searchLimiter` | `GET /:id/search`, `GET /users/search` | userId | 30 / min |
+
+- `standardHeaders: 'draft-7'`, `legacyHeaders: false`. Return a 429 with the body `{ error: 'Too many requests, try again in Ns' }` so it matches the existing `{ error }` shape that `frontend/src/utils/errors.js` already reads. Also send a `Retry-After` header.
+- Wiring: the limiters go in the route files (`routes/auth.js`, `routes/conversations.js`, `routes/users.js`) as extra middleware next to `authenticateToken`.
+- *Test:* 6 bad logins in a row means the 6th returns 429. The login form shows the message.
+
+**Step A4: Socket event rate limiting (token bucket in Redis)**
+- New `backend/src/ratelimit/tokenBucket.js`: a **token bucket written by hand as a Lua script** (this is the main learning piece). `take(key, { capacity, refillPerSec, cost = 1 })` returns `{ allowed, retryAfterMs }`. State is a Redis HASH `{tokens, ts}` with a TTL, and it is computed atomically on the server using Redis `TIME`.
+- Applied in `backend/src/sockets/index.js`:
+  - **Handshake** (`io.use`): `conn:<ip>` gets 20 connections per minute. When the bucket is empty: `next(new Error('Too many connections'))`.
+  - **`send_message`**: `msg:<userId>` gets a capacity of 10 with a refill of 1/sec. It is keyed by user, not socket, so opening 5 tabs doesn't give 5× the quota. When the bucket is empty: `fail(...)` with `{ ok:false, error:'You are sending messages too fast', retryAfterMs }`.
+  - **`join_conversation`**: `join:<userId>` gets a capacity of 20 with a refill of 1/sec.
+  - **`message_delivered`**: `ack:<userId>` gets a capacity of 100 with a refill of 20/sec, dropped silently like today.
+  - **`typing`**: keeps the existing per-socket in-memory throttle (`TYPING_THROTTLE_MS`). It is ephemeral and per-connection, so a Redis round trip per keystroke isn't worth it.
+- *Test:* new `backend/test-client/load.js` (based on `test-client/client.js`) with `--spam` sends 30 messages in 1s. About 10 are acked `ok`, and the rest return `ok:false` with `retryAfterMs`.
+
+**Step A5: Frontend touches**
+- `utils/errors.js`: no change is needed, because the 429 body uses the `{ error }` shape.
+- `SocketContext.jsx`: on `connect_error` with the message `'Too many connections'`, log it and let the built-in backoff retry.
+- `MessageThread.jsx`: the reply path already shows `res.error`, and normal sends already mark the bubble `failed`. Optionally, show "Slow down, try again in Ns" when `res.retryAfterMs` is present.
+
+### Files
+- **New:** `backend/src/redis.js`, `backend/src/middleware/rateLimit.js`, `backend/src/ratelimit/tokenBucket.js`, `backend/test-client/load.js`
+- **Modified:** `backend/package.json`, `backend/src/index.js`, `backend/src/sockets/index.js`, `backend/src/routes/auth.js`, `backend/src/routes/conversations.js`, `backend/src/routes/users.js`, `frontend/src/context/SocketContext.jsx`
+
+### Done when
+- [ ] Brute-forcing login gets a 429 with `Retry-After`.
+- [ ] Spamming `send_message` gets `ok:false` after about 10 messages, and sending works again after a few seconds.
+- [ ] `docker exec -it wisper-redis redis-cli` lets you see the `rl:*` keys and their TTLs with `KEYS *` and `TTL <key>`.
+- [ ] Normal chatting in the browser is unaffected.
+
+### Concepts to write up (in `Scaling_Concepts.md`)
+Fixed window vs sliding window vs token bucket; why rate-limit state must be shared (Redis); why Lua scripts make it atomic; choosing a key (IP vs user vs IP+email).
+
+---
+
+## Phase 9B: Shared State (multi-instance ready)
+
+**Goal:** make the code correct when more than one backend process is running. You test this **without** a load balancer, by running 2 instances on different ports and pointing two browsers at different ports.
+
+### Steps (in order)
+
+**Step B1: Instance identity**
+- New `backend/src/instance.js`: `INSTANCE_ID = process.env.INSTANCE_ID || os.hostname() + ':' + PORT`.
+- Middleware in `index.js` sets an `X-Instance-Id` header on every response. Use it in logs too.
+
+**Step B2: Socket.io Redis adapter**
+- `npm install @socket.io/redis-adapter`.
+- `redis.js` exports `createPubSub()`, which returns `[pub, sub]` duplicates.
+- `index.js`: `io.adapter(createAdapter(pub, sub))`, so every `io.to(room).emit` now fans out through Redis pub/sub to all instances. No changes are needed at the emit call sites in `sockets/index.js` or `routes/conversations.js` (which uses `req.app.get('io')`).
+- *Test:* with user A on :5000 and user B on :5001, messages, typing, delivered ✓✓ and read receipts all work both ways.
+
+**Step B3: Move presence to Redis**
+Rewrite `backend/src/sockets/presence.js` with the **same exported API**, now async: `add`, `remove`, `isOnline`, `onlineAmong`.
 
 Keys:
 - `presence:sockets:<userId>` is a SET of `<instanceId>|<socketId>`.
@@ -57,93 +149,95 @@ Atomicity: `add` and `remove` are small **Lua scripts** (`redis.defineCommand`),
 
 `onlineAmong(ids)` uses one `SMISMEMBER presence:online ...ids` call.
 
-Crash cleanup (an instance dies without running its disconnect handlers): every instance runs a sweeper every 15s. It reads the known instances and, for any instance whose `presence:alive:*` key has expired, calls `remove` for each member in `presence:instance:<deadId>`. For users that go offline this way, it emits `user_offline` to their conversation rooms (from `conversation_participants`) and writes `last_seen_at`. This reuses the same logic as the `disconnect` path.
-
 Changes in `backend/src/sockets/index.js`:
-- `const cameOnline = await presence.add(...)`. The `disconnecting` and `disconnect` listeners must still be registered **before** this first await, per the existing comment at line 56, so register them first and then await.
+- `const cameOnline = await presence.add(...)`. The `disconnecting` and `disconnect` listeners must still be registered **before** this first await, per the existing comment, so register them first and then await.
 - In `disconnecting`, capture the `conversation:*` room list synchronously, then `await presence.remove(...)` and emit to the captured rooms.
 - `presence_snapshot` awaits `presence.onlineAmong(...)`.
 
-## Step 3: REST rate limiting (Express layer)
+*Test:* the same user opens a tab on :5000 and another on :5001. Closing one leaves them online. Closing both shows them offline to the peer.
 
-New `backend/src/middleware/rateLimit.js` builds `express-rate-limit` limiters with a shared `RedisStore` (`rate-limit-redis` using `sendCommand` on the ioredis client), so limits apply **across all instances**:
+**Step B4: Crash cleanup (sweeper)**
+- When an instance dies without running its disconnect handlers, every surviving instance runs a sweeper every 15s. It reads the known instances and, for any instance whose `presence:alive:*` key has expired, calls `remove` for each member in `presence:instance:<deadId>`.
+- For users that go offline this way, it emits `user_offline` to their conversation rooms (from `conversation_participants`) and writes `last_seen_at`. This reuses the same logic as the `disconnect` path.
+- *Test:* kill the :5001 process with Ctrl+C twice or Task Manager. Within about 30s, its users show offline on :5000.
 
-| Limiter | Applied to | Key | Limit |
-|---|---|---|---|
-| `loginLimiter` | `POST /api/auth/login` | IP + lower-cased email | 5 / 15 min, `skipSuccessfulRequests: true` |
-| `signupLimiter` | `POST /api/auth/signup` | IP | 5 / hour |
-| `apiLimiter` | `/api/conversations`, `/api/users` | `req.userId` (after `authenticateToken`), else IP | 120 / min |
-| `searchLimiter` | `GET /:id/search`, `GET /users/search` | userId | 30 / min |
+**Step B5: Health check + graceful shutdown**
+- `GET /health`: pings MySQL and Redis and returns `{ status, instanceId }` (503 if either fails).
+- On `SIGTERM`/`SIGINT`: stop accepting connections, call `io.close()` (clients auto-reconnect and rejoin rooms via the existing on-connect logic), remove this instance's presence entries, then `redis.quit()` and `pool.end()`.
 
-- `standardHeaders: 'draft-7'`, `legacyHeaders: false`. Return a 429 with the body `{ error: 'Too many requests, try again in Ns' }` so it matches the existing `{ error }` shape that `frontend/src/utils/errors.js` already reads. Also send a `Retry-After` header.
-- `app.set('trust proxy', 1)` in `index.js` so `req.ip` is the real client IP from Nginx's `X-Forwarded-For` and not Nginx's IP.
-- `express.json({ limit: '100kb' })` to cap payload size.
-- Wiring: the limiters go in the route files (`routes/auth.js`, `routes/conversations.js`, `routes/users.js`) as extra middleware next to `authenticateToken`.
+### How to run two instances locally
+- Terminal 1: `npm run dev` (PORT=5000 from `.env`).
+- Terminal 2 (PowerShell): `$env:PORT=5001; $env:INSTANCE_ID='b'; npm run dev`.
+- For the frontend, run a second Vite dev server with `VITE_API_URL=http://localhost:5001`, or use `test-client/client.js` pointed at :5001.
 
-## Step 4: Socket event rate limiting (token bucket in Redis)
+### Files
+- **New:** `backend/src/instance.js`
+- **Modified:** `backend/package.json`, `backend/src/redis.js`, `backend/src/index.js`, `backend/src/sockets/presence.js`, `backend/src/sockets/index.js`
 
-New `backend/src/ratelimit/tokenBucket.js`: a **token bucket written by hand as a Lua script** (this is the main learning piece). `take(key, { capacity, refillPerSec, cost = 1 })` returns `{ allowed, retryAfterMs }`. State is a Redis HASH `{tokens, ts}` with a TTL, and it is computed atomically on the server using Redis `TIME`.
+### Done when
+- [ ] Two users on two different instances can chat, and typing, delivered and read receipts all show up.
+- [ ] Presence dots are correct across instances, including multi-tab.
+- [ ] Killing one instance clears its users' presence within about 30s.
+- [ ] `curl localhost:5000/health` and `curl localhost:5001/health` return their own `instanceId`.
+- [ ] `redis-cli SMEMBERS presence:online` matches who is actually online.
 
-Applied in `backend/src/sockets/index.js`:
-- **Handshake** (`io.use`): `conn:<ip>` gets 20 connections per minute. This stops reconnect storms and abuse. When the bucket is empty: `next(new Error('Too many connections'))`.
-- **`send_message`**: `msg:<userId>` gets a capacity of 10 with a refill of 1/sec. It is keyed by user, not socket, so opening 5 tabs doesn't give 5× the quota. When the bucket is empty: `fail(...)` with `{ ok:false, error:'You are sending messages too fast', retryAfterMs }`. The frontend already shows `res.error` (`MessageThread.jsx:879`) and marks optimistic bubbles as `failed` (`:848`).
-- **`join_conversation`**: `join:<userId>` gets a capacity of 20 with a refill of 1/sec.
-- **`message_delivered`**: `ack:<userId>` gets a capacity of 100 with a refill of 20/sec, dropped silently like today.
-- **`typing`**: keeps the existing per-socket in-memory throttle (`TYPING_THROTTLE_MS`). It is ephemeral and per-connection, so a Redis round trip per keystroke isn't worth it.
-- New input validation in `send_message`: `body` must be a non-empty string of at most 4000 chars. Also set Socket.io `maxHttpBufferSize: 1e5`.
+### Concepts to write up
+Why in-memory state breaks with multiple instances; pub/sub fan-out via the Redis adapter; presence as distributed state with heartbeats and TTLs; race conditions and atomic transitions; graceful shutdown.
 
-## Step 5: Nginx load balancer
+---
 
+## Phase 9C: Load Balancer + Docker
+
+**Goal:** put Nginx in front of 3 instances so clients only ever talk to one address (`:8080`), add edge rate limiting, and package everything with Docker Compose.
+
+### Steps (in order)
+
+**Step C1: Dockerize the backend**
+- New `backend/Dockerfile`: `node:22-slim` (Debian, so `bcrypt` native prebuilds work), `npm ci --omit=dev`, `CMD ["node","src/index.js"]`.
+- New `backend/.dockerignore` (node_modules, .env).
+- MySQL note: the host MySQL user must accept connections from Docker (`'user'@'%'`, or `172.%`).
+
+**Step C2: Docker Compose**
+- New root `docker-compose.yml`:
+  - `redis:7-alpine` with a healthcheck (`redis-cli ping`). It replaces the manual `docker run` from 9A.
+  - `backend1/2/3` share one YAML anchor: `env_file: backend/.env`, overrides `INSTANCE_ID=backendN`, `REDIS_URL=redis://redis:6379`, `DB_HOST=host.docker.internal`, `extra_hosts: host.docker.internal:host-gateway`, `depends_on: redis (healthy)`, and a healthcheck on `/health`.
+- *Test:* run `docker compose up --build redis backend1`, then `curl localhost:5000/health` (publish the port temporarily).
+
+**Step C3: Nginx load balancer**
 New `infra/nginx/nginx.conf`:
 - `upstream wisper_backend { least_conn; server backend1:5000 max_fails=3 fail_timeout=10s; ... backend2, backend3 }`
 - WebSocket proxying: `proxy_http_version 1.1`, `Upgrade $http_upgrade`, `Connection "upgrade"`, `proxy_read_timeout 75s` (above Socket.io's 25s ping).
 - `X-Forwarded-For`, `X-Real-IP`, `X-Forwarded-Proto` headers.
-- Edge rate limit, the coarse first layer: `limit_req_zone $binary_remote_addr zone=api:10m rate=20r/s;` with `limit_req zone=api burst=40 nodelay;` on `/api/`, and `limit_conn` per IP on `/socket.io/`. It returns 429.
 - `add_header X-Upstream $upstream_addr` so you can watch requests move between instances.
+- Add an `nginx:1.27-alpine` service to compose that mounts the config and publishes `8080:80`.
+- Backend: `app.set('trust proxy', 1)` in `index.js`, so `req.ip` (used by the 9A limiters) is the real client IP and not Nginx's IP.
 
-**Sticky sessions:** Socket.io's HTTP long-polling transport needs every request of a session to hit the same instance. Instead of `ip_hash` (on localhost every client has the same IP, so everything would land on one instance), the client goes **WebSocket-only**: in `frontend/src/context/SocketContext.jsx`, call `io(API_BASE_URL, { auth: { token }, transports: ['websocket'] })`. One TCP connection then stays on one instance, so stickiness isn't needed. `Scaling_Concepts.md` explains this trade-off.
+**Step C4: WebSocket-only client (no sticky sessions)**
+- Socket.io's HTTP long-polling transport needs every request of a session to hit the same instance. Instead of `ip_hash` (on localhost every client has the same IP, so everything would land on one instance), the client goes **WebSocket-only**.
+- `frontend/src/context/SocketContext.jsx`: `io(API_BASE_URL, { auth: { token }, transports: ['websocket'] })`.
+- `frontend/.env.local`: `VITE_API_URL=http://localhost:8080` (`api/client.js` already reads it).
 
-## Step 6: Docker Compose and instance lifecycle
+**Step C5: Edge rate limiting in Nginx**
+- `limit_req_zone $binary_remote_addr zone=api:10m rate=20r/s;` with `limit_req zone=api burst=40 nodelay;` on `/api/`, returning 429.
+- `limit_conn` per IP on `/socket.io/`.
+- This is the coarse first layer. The 9A app limits stay as the fine-grained per-user layer.
 
-- New `backend/Dockerfile`: `node:22-slim` (Debian, so `bcrypt` native prebuilds work), `npm ci --omit=dev`, `CMD ["node","src/index.js"]`. Plus a `backend/.dockerignore` (node_modules, .env).
-- New root `docker-compose.yml`:
-  - `redis:7-alpine` with a healthcheck (`redis-cli ping`)
-  - `backend1/2/3` share one YAML anchor: `env_file: backend/.env`, overrides `INSTANCE_ID=backendN`, `REDIS_URL=redis://redis:6379`, `DB_HOST=host.docker.internal`, `extra_hosts: host.docker.internal:host-gateway`, and `depends_on: redis (healthy)`
-  - `nginx:1.27-alpine` mounts `infra/nginx/nginx.conf` and publishes `8080:80`
-- Frontend: `frontend/.env.local` sets `VITE_API_URL=http://localhost:8080` (`api/client.js` already reads it).
-- MySQL note: the host MySQL user must accept connections from Docker (`'user'@'%'`, or `172.%`). This goes in the README.
-- `GET /health` in `index.js`: pings MySQL and Redis and returns `{ status, instanceId }` (503 if either fails). It is also used by a compose `healthcheck`.
-- **Graceful shutdown** on `SIGTERM`/`SIGINT`: stop accepting connections, call `io.close()` (clients auto-reconnect through Nginx to a healthy instance and rejoin rooms via the existing on-connect logic), remove this instance's presence entries, then `redis.quit()` and `pool.end()`.
-- Middleware that sets `X-Instance-Id` on every response.
+**Step C6: Docs**
+- Finish `Scaling_Concepts.md`.
+- `PHASE_EXE.md`: add "Phase 9: Rate Limiting and Horizontal Scale" and point the 8.4 Redis line to it.
+- `README.md`: add a "Run the scaled stack" section (`docker compose up --build`, then the frontend on `:5173` talking to `:8080`).
 
-## Step 7: Frontend touches (small)
+### Files
+- **New:** `backend/Dockerfile`, `backend/.dockerignore`, `docker-compose.yml`, `infra/nginx/nginx.conf`, `frontend/.env.local`, `Scaling_Concepts.md`
+- **Modified:** `backend/src/index.js`, `frontend/src/context/SocketContext.jsx`, `PHASE_EXE.md`, `README.md`
 
-- `SocketContext.jsx`: `transports: ['websocket']`, and handle a `connect_error` with the message `'Too many connections'` (log it and let the built-in backoff retry).
-- `utils/errors.js`: no change is needed, because the 429 body uses the `{ error }` shape.
-- Optional: in `MessageThread.jsx`, when `res.retryAfterMs` is present, show "Slow down, try again in Ns" instead of a generic failure.
+### Done when
+- [ ] Running `curl -i localhost:8080/health` several times shows `X-Instance-Id` cycling between backend1, backend2 and backend3.
+- [ ] Two browsers as two users land on different instances (check `docker compose logs`), and everything in chat works.
+- [ ] `docker compose stop backend2`: clients reconnect to another instance within seconds, and chat continues.
+- [ ] `docker compose kill backend3` (no graceful shutdown): the sweeper clears stale presence within about 30s.
+- [ ] A `for` loop of 200 `curl` requests to `/api/users/search` returns 429, from Nginx first (burst) and then from the app limiter.
+- [ ] `npm run lint` passes in `frontend/`.
 
-## Step 8: Docs
-
-- New `Scaling_Concepts.md` (same style as `Auth_Concepts.md`): fixed window vs sliding window vs token bucket; why rate limit state must be shared (Redis); layered limits (edge vs app vs event); L4 vs L7 load balancing; round-robin vs least_conn vs ip_hash; sticky sessions and Socket.io transports; pub/sub fan-out via the Redis adapter; presence as distributed state with heartbeats and TTLs; graceful shutdown and reconnects; what would come next (Redis Sentinel/Cluster, Kubernetes, MySQL read replicas).
-- `PHASE_EXE.md`: add "Phase 9: Rate Limiting and Horizontal Scale" with the deliverables above, and update the 8.4 Redis line to point to it.
-- `README.md`: a "Run the scaled stack" section with the commands.
-
----
-
-## Files
-
-**New:** `backend/src/redis.js`, `backend/src/instance.js`, `backend/src/middleware/rateLimit.js`, `backend/src/ratelimit/tokenBucket.js`, `backend/Dockerfile`, `backend/.dockerignore`, `docker-compose.yml`, `infra/nginx/nginx.conf`, `backend/test-client/load.js`, `Scaling_Concepts.md`
-
-**Modified:** `backend/src/index.js`, `backend/src/sockets/index.js`, `backend/src/sockets/presence.js`, `backend/src/routes/auth.js`, `backend/src/routes/conversations.js`, `backend/src/routes/users.js`, `backend/package.json`, `frontend/src/context/SocketContext.jsx`, `PHASE_EXE.md`, `README.md`
-
----
-
-## Verification
-
-1. **Stack up:** run `docker compose up --build`, then `curl -i localhost:8080/health` several times. `X-Instance-Id` should cycle between backend1, backend2 and backend3.
-2. **Cross-instance delivery:** open two browsers (or a normal and an incognito window) as two users and confirm that `docker compose logs` shows their sockets on different instances. Messages, typing, delivered ✓✓, read receipts and presence dots should all work. New `backend/test-client/load.js` (based on `test-client/client.js`) opens N sockets through `:8080`, sends messages and asserts that every recipient gets `new_message`, whichever instance it is on.
-3. **Failover:** run `docker compose stop backend2`. Clients on it reconnect to another instance within a few seconds and rejoin rooms, and chat continues. The peer briefly sees offline then online again. With `docker compose kill backend3` (no graceful shutdown), the sweeper clears its stale presence within about 30s.
-4. **REST limits:** 6 bad logins in a row: the 6th returns 429 with `Retry-After`, from any instance. A `for` loop of 200 `curl` requests to `/api/users/search` returns 429, from Nginx first (burst) and then from the app limiter.
-5. **Socket limits:** `load.js --spam` sends 30 `send_message` events in 1s. About 10 are acked `ok`, and the rest return `ok:false` with `retryAfterMs`. Opening 25 connections in a minute from one IP gets `connect_error: Too many connections`.
-6. **Redis inspection:** `docker compose exec redis redis-cli` lets you check `SMEMBERS presence:online`, `KEYS presence:*` and the `rl:*` keys with their TTLs.
-7. **Frontend lint:** run `npm run lint` in `frontend/`.
+### Concepts to write up
+L4 vs L7 load balancing; round-robin vs least_conn vs ip_hash; sticky sessions and Socket.io transports; edge vs app vs event rate limits (defense in depth); health checks and failover; what would come next (Redis Sentinel/Cluster, Kubernetes, MySQL read replicas).
